@@ -35,7 +35,18 @@ Phase 5: 部分成交 (Partial Fill) ✅ DONE
 Phase 6: 連續成交 (Multiple Matches) ✅ DONE
 - [x] 6.1 一個大單與多個對手方連續成交
 
-Phase 7: 邊界條件 (Edge Cases) - 可選
+Phase 1.5a: 市價單 (Market Order) ✅ DONE
+- [x] 市價買單吃掉最低價賣單
+- [x] 市價賣單吃掉最高價買單
+- [x] 市價單連續成交多個 Maker
+- [x] 市價單數量 > 訂單簿深度時，部分成交
+
+Phase 1.5b: 多交易對 (Multi-Symbol) ✅ DONE
+- [x] 不同交易對的訂單不會互相撮合
+- [x] 同交易對可正常撮合
+- [x] GetEngine 重複呼叫應返回同一個 Engine
+
+Phase 7: 邊界條件 (Edge Cases) - 暫緩
 - [ ] 7.1 價格不匹配時，不成交
 - [ ] 7.2 自成交防護
 
@@ -301,4 +312,136 @@ func TestEngine_MultipleMatches_LargeOrderMatchesMultiple(t *testing.T) {
 	assert.Equal(t, 1, engine.OrderBook().AskCount(), "應剩一個賣單")
 	remainingSell := engine.OrderBook().BestAsk()
 	assert.Equal(t, decimal.NewFromInt(1), remainingSell.Quantity, "剩餘賣單數量為 1")
+}
+
+// ============================================================
+// Phase 1.5: 市價單 (Market Order)
+// ============================================================
+
+// TODO 1.5.1: 市價買單吃掉最低價賣單
+func TestEngine_MarketBuyOrder_MatchesLowestAsk(t *testing.T) {
+	engine := NewEngine("BTC-USD")
+
+	// 掛兩個賣單
+	engine.Process(NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1)))
+	engine.Process(NewOrder(SideSell, decimal.NewFromInt(102), decimal.NewFromInt(1)))
+
+	// 市價買單：數量 1
+	marketBuy := NewMarketOrder(SideBuy, decimal.NewFromInt(1))
+
+	trades := engine.Process(marketBuy)
+
+	assert.Len(t, trades, 1, "應產生一筆成交")
+	assert.Equal(t, decimal.NewFromInt(100), trades[0].Price, "應以最低賣價 100 成交")
+	assert.Equal(t, 1, engine.OrderBook().AskCount(), "價格 102 的賣單應還在")
+}
+
+// TODO 1.5.2: 市價賣單吃掉最高價買單
+func TestEngine_MarketSellOrder_MatchesHighestBid(t *testing.T) {
+	engine := NewEngine("BTC-USD")
+
+	// 掛兩個買單
+	engine.Process(NewOrder(SideBuy, decimal.NewFromInt(98), decimal.NewFromInt(1)))
+	engine.Process(NewOrder(SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1)))
+
+	// 市價賣單：數量 1
+	marketSell := NewMarketOrder(SideSell, decimal.NewFromInt(1))
+
+	trades := engine.Process(marketSell)
+
+	assert.Len(t, trades, 1, "應產生一筆成交")
+	assert.Equal(t, decimal.NewFromInt(100), trades[0].Price, "應以最高買價 100 成交")
+	assert.Equal(t, 1, engine.OrderBook().BidCount(), "價格 98 的買單應還在")
+}
+
+// TODO 1.5.3: 市價單連續成交多個 Maker
+func TestEngine_MarketOrder_MatchesMultipleMakers(t *testing.T) {
+	engine := NewEngine("BTC-USD")
+
+	// 掛三個賣單
+	engine.Process(NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1)))
+	engine.Process(NewOrder(SideSell, decimal.NewFromInt(101), decimal.NewFromInt(2)))
+	engine.Process(NewOrder(SideSell, decimal.NewFromInt(102), decimal.NewFromInt(3)))
+
+	// 市價買單：數量 4 (吃掉前兩個賣單 + 第三個部分)
+	marketBuy := NewMarketOrder(SideBuy, decimal.NewFromInt(4))
+
+	trades := engine.Process(marketBuy)
+
+	assert.Len(t, trades, 3, "應與三個賣單成交")
+	assert.Equal(t, decimal.NewFromInt(1), trades[0].Quantity, "第一筆成交 1")
+	assert.Equal(t, decimal.NewFromInt(2), trades[1].Quantity, "第二筆成交 2")
+	assert.Equal(t, decimal.NewFromInt(1), trades[2].Quantity, "第三筆成交 1 (部分)")
+	assert.Equal(t, 1, engine.OrderBook().AskCount(), "應剩一個賣單")
+}
+
+// TODO 1.5.4: 市價單數量 > 訂單簿深度時，部分成交
+func TestEngine_MarketOrder_PartialFillWhenInsufficientLiquidity(t *testing.T) {
+	engine := NewEngine("BTC-USD")
+
+	// 掛一個賣單：數量 2
+	engine.Process(NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(2)))
+
+	// 市價買單：數量 5 (超過訂單簿深度)
+	marketBuy := NewMarketOrder(SideBuy, decimal.NewFromInt(5))
+
+	trades := engine.Process(marketBuy)
+
+	assert.Len(t, trades, 1, "應產生一筆成交")
+	assert.Equal(t, decimal.NewFromInt(2), trades[0].Quantity, "只能成交 2")
+	assert.Equal(t, 0, engine.OrderBook().AskCount(), "賣單應被吃光")
+	// 市價單剩餘部分不進入訂單簿
+	assert.Equal(t, 0, engine.OrderBook().BidCount(), "市價單剩餘不應進入訂單簿")
+}
+
+// ============================================================
+// Phase 1.5: 多交易對支援 (Multi-Symbol)
+// ============================================================
+
+// TODO 3.1: 不同交易對的訂單不會互相撮合
+func TestEngineManager_DifferentSymbols_NoMatch(t *testing.T) {
+	manager := NewEngineManager()
+
+	// BTC-USD 掛一個賣單
+	btcEngine := manager.GetEngine("BTC-USD")
+	btcSell := NewOrder(SideSell, decimal.NewFromInt(50000), decimal.NewFromInt(1))
+	btcEngine.Process(btcSell)
+
+	// ETH-USD 掛一個買單 (不應與 BTC-USD 的賣單撮合)
+	ethEngine := manager.GetEngine("ETH-USD")
+	ethBuy := NewOrder(SideBuy, decimal.NewFromInt(50000), decimal.NewFromInt(1))
+	trades := ethEngine.Process(ethBuy)
+
+	assert.Empty(t, trades, "不同交易對不應撮合")
+	assert.Equal(t, 1, btcEngine.OrderBook().AskCount(), "BTC 賣單應還在")
+	assert.Equal(t, 1, ethEngine.OrderBook().BidCount(), "ETH 買單應進入訂單簿")
+}
+
+// TODO 3.2: 同交易對可正常撮合
+func TestEngineManager_SameSymbol_MatchesCorrectly(t *testing.T) {
+	manager := NewEngineManager()
+
+	engine := manager.GetEngine("BTC-USD")
+
+	// 掛賣單
+	sellOrder := NewOrder(SideSell, decimal.NewFromInt(50000), decimal.NewFromInt(1))
+	engine.Process(sellOrder)
+
+	// 同交易對買單應撮合
+	buyOrder := NewOrder(SideBuy, decimal.NewFromInt(50000), decimal.NewFromInt(1))
+	trades := engine.Process(buyOrder)
+
+	assert.Len(t, trades, 1, "同交易對應撮合")
+	assert.Equal(t, 0, engine.OrderBook().AskCount())
+	assert.Equal(t, 0, engine.OrderBook().BidCount())
+}
+
+// TODO 3.3: GetEngine 重複呼叫應返回同一個 Engine
+func TestEngineManager_GetEngine_ReturnsSameInstance(t *testing.T) {
+	manager := NewEngineManager()
+
+	engine1 := manager.GetEngine("BTC-USD")
+	engine2 := manager.GetEngine("BTC-USD")
+
+	assert.Same(t, engine1, engine2, "應返回同一個 Engine 實例")
 }

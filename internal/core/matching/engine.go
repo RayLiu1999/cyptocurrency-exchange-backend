@@ -1,10 +1,15 @@
 package matching
 
-import "github.com/google/uuid"
+import (
+	"sync"
+
+	"github.com/google/uuid"
+)
 
 // Engine 撮合引擎
 type Engine struct {
 	orderBook *OrderBook
+	mu        sync.Mutex
 }
 
 // NewEngine 建立新的撮合引擎
@@ -16,11 +21,16 @@ func NewEngine(symbol string) *Engine {
 
 // OrderBook 返回訂單簿
 func (e *Engine) OrderBook() *OrderBook {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	return e.orderBook
 }
 
 // Process 處理新訂單，返回成交結果
 func (e *Engine) Process(order *Order) []*Trade {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	var trades []*Trade
 
 	if order.Side == SideBuy {
@@ -31,8 +41,8 @@ func (e *Engine) Process(order *Order) []*Trade {
 		trades = e.matchSellOrder(order)
 	}
 
-	// 如果還有剩餘數量，加入訂單簿
-	if order.Quantity.IsPositive() {
+	// 如果還有剩餘數量，限價單加入訂單簿，市價單不加入
+	if order.Quantity.IsPositive() && order.Type != TypeMarket {
 		e.orderBook.AddOrder(order)
 	}
 
@@ -50,8 +60,8 @@ func (e *Engine) matchBuyOrder(buyOrder *Order) []*Trade {
 			break // 沒有賣單可匹配
 		}
 
-		// 檢查價格是否匹配：買單價格 >= 賣單價格
-		if buyOrder.Price.LessThan(bestAsk.Price) {
+		// 檢查價格是否匹配：限價單需檢查，市價單直接成交
+		if buyOrder.Type != TypeMarket && buyOrder.Price.LessThan(bestAsk.Price) {
 			break // 價格不匹配
 		}
 
@@ -64,6 +74,7 @@ func (e *Engine) matchBuyOrder(buyOrder *Order) []*Trade {
 		// 建立成交記錄
 		trade := &Trade{
 			ID:           uuid.New(),
+			Symbol:       e.orderBook.Symbol(),
 			MakerOrderID: bestAsk.ID,
 			TakerOrderID: buyOrder.ID,
 			Price:        bestAsk.Price, // 成交價格 = Maker 價格
@@ -100,8 +111,8 @@ func (e *Engine) matchSellOrder(sellOrder *Order) []*Trade {
 			break // 沒有買單可匹配
 		}
 
-		// 檢查價格是否匹配：賣單價格 <= 買單價格
-		if sellOrder.Price.GreaterThan(bestBid.Price) {
+		// 檢查價格是否匹配：限價單需檢查，市價單直接成交
+		if sellOrder.Type != TypeMarket && sellOrder.Price.GreaterThan(bestBid.Price) {
 			break // 價格不匹配
 		}
 
@@ -114,6 +125,7 @@ func (e *Engine) matchSellOrder(sellOrder *Order) []*Trade {
 		// 建立成交記錄
 		trade := &Trade{
 			ID:           uuid.New(),
+			Symbol:       e.orderBook.Symbol(),
 			MakerOrderID: bestBid.ID,
 			TakerOrderID: sellOrder.ID,
 			Price:        bestBid.Price, // 成交價格 = Maker 價格

@@ -22,7 +22,7 @@ type placeOrderRequest struct {
 	Symbol   string          `json:"symbol" binding:"required"`
 	Side     string          `json:"side" binding:"required,oneof=BUY SELL"`
 	Type     string          `json:"type" binding:"required,oneof=LIMIT MARKET"`
-	Price    decimal.Decimal `json:"price" binding:"required"`
+	Price    decimal.Decimal `json:"price"` // 市價單可不傳
 	Quantity decimal.Decimal `json:"quantity" binding:"required"`
 }
 
@@ -121,8 +121,42 @@ func (h *Handler) GetOrders(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// CancelOrder 取消訂單
+func (h *Handler) CancelOrder(c *gin.Context) {
+	idStr := c.Param("id")
+	orderID, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "無效的訂單 ID"})
+		return
+	}
+
+	// 從 Header 或 Query 取得 user_id (簡化版，之後會用 JWT)
+	userIDStr := c.GetHeader("X-User-ID")
+	if userIDStr == "" {
+		userIDStr = c.Query("user_id")
+	}
+	if userIDStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 user_id"})
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "無效的 user_id"})
+		return
+	}
+
+	if err := h.svc.CancelOrder(c.Request.Context(), orderID, userID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
+}
+
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	r.POST("/orders", h.PlaceOrder)
 	r.GET("/orders/:id", h.GetOrder)
 	r.GET("/orders", h.GetOrders)
+	r.DELETE("/orders/:id", h.CancelOrder)
 }

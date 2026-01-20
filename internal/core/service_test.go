@@ -15,17 +15,22 @@ import (
 /*
 === TDD TODO List: Service Layer ===
 
-Step 1: Maker 訂單狀態更新
+Phase 1: Maker 訂單狀態更新 ✅ DONE
 - [x] 1.1 成交後 Maker 訂單 filled_quantity 應增加
 - [x] 1.2 成交後 Maker 訂單狀態應更新
 
-Step 2: 資金結算邏輯
+Phase 2: 資金結算邏輯 ✅ DONE
 - [x] 2.1 買方：解鎖 USD，增加 BTC
 - [x] 2.2 賣方：解鎖 BTC，增加 USD
 
-Step 3: 服務層測試
+Phase 3: 服務層測試 ✅ DONE
 - [x] 3.1 PlaceOrder 餘額不足應返回錯誤
 - [x] 3.2 PlaceOrder 撮合成功應更新訂單狀態
+
+Phase 1.5: 取消訂單 (Cancel Order) ✅ DONE
+- [x] 取消成功應解鎖剩餘資金並更新狀態
+- [x] 取消已成交訂單應返回錯誤
+- [x] 取消其他用戶訂單應返回錯誤
 
 =====================================
 */
@@ -113,6 +118,26 @@ func (m *MockAccountRepository) UnlockFunds(ctx context.Context, userID uuid.UUI
 	return args.Error(0)
 }
 
+type MockDBTransaction struct{}
+
+func (m *MockDBTransaction) ExecTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	return fn(ctx)
+}
+
+// MockTradeRepository implementation
+type MockTradeRepository struct {
+	mock.Mock
+}
+
+func NewMockTradeRepository() *MockTradeRepository {
+	return &MockTradeRepository{}
+}
+
+func (m *MockTradeRepository) CreateTrade(ctx context.Context, trade *matching.Trade) error {
+	args := m.Called(ctx, trade)
+	return args.Error(0)
+}
+
 // ============================================================
 // Step 1: Maker 訂單狀態更新
 // ============================================================
@@ -123,7 +148,8 @@ func TestProcessTrade_MakerFilledQuantityIncreases(t *testing.T) {
 	ctx := context.Background()
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, "BTC-USD")
+	tradeRepo := NewMockTradeRepository()
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
 
 	makerOrderID := uuid.New()
 	makerOrder := &Order{
@@ -156,6 +182,7 @@ func TestProcessTrade_MakerFilledQuantityIncreases(t *testing.T) {
 	orderRepo.On("UpdateOrder", ctx, mock.AnythingOfType("*core.Order")).Return(nil)
 	accountRepo.On("UnlockFunds", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	accountRepo.On("UpdateBalance", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	tradeRepo.On("CreateTrade", ctx, trade).Return(nil) // Added expectation
 
 	// Act
 	err := svc.ProcessTrade(ctx, trade, takerOrder)
@@ -171,7 +198,8 @@ func TestProcessTrade_MakerStatusUpdated(t *testing.T) {
 	ctx := context.Background()
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, "BTC-USD")
+	tradeRepo := NewMockTradeRepository()
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
 
 	makerOrderID := uuid.New()
 	makerOrder := &Order{
@@ -204,6 +232,7 @@ func TestProcessTrade_MakerStatusUpdated(t *testing.T) {
 	orderRepo.On("UpdateOrder", ctx, mock.AnythingOfType("*core.Order")).Return(nil)
 	accountRepo.On("UnlockFunds", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	accountRepo.On("UpdateBalance", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	tradeRepo.On("CreateTrade", ctx, trade).Return(nil) // Added expectation
 
 	// Act
 	err := svc.ProcessTrade(ctx, trade, takerOrder)
@@ -223,7 +252,8 @@ func TestSettleTrade_BuyerUnlocksUSDAndReceivesBTC(t *testing.T) {
 	ctx := context.Background()
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, "BTC-USD")
+	tradeRepo := NewMockTradeRepository()
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
 
 	takerOrder := &Order{
 		ID:     uuid.New(),
@@ -256,7 +286,7 @@ func TestSettleTrade_BuyerUnlocksUSDAndReceivesBTC(t *testing.T) {
 	assert.NoError(t, err)
 	// 驗證呼叫了 4 次 (買方 2 次 + 賣方 2 次)
 	accountRepo.AssertNumberOfCalls(t, "UnlockFunds", 2)
-	accountRepo.AssertNumberOfCalls(t, "UpdateBalance", 2)
+	accountRepo.AssertNumberOfCalls(t, "UpdateBalance", 4)
 }
 
 // TODO 2.2: 賣方：解鎖 BTC，增加 USD
@@ -265,7 +295,8 @@ func TestSettleTrade_SellerUnlocksBTCAndReceivesUSD(t *testing.T) {
 	ctx := context.Background()
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, "BTC-USD")
+	tradeRepo := NewMockTradeRepository()
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
 
 	takerOrder := &Order{
 		ID:     uuid.New(),
@@ -296,7 +327,7 @@ func TestSettleTrade_SellerUnlocksBTCAndReceivesUSD(t *testing.T) {
 	// Assert
 	assert.NoError(t, err)
 	accountRepo.AssertNumberOfCalls(t, "UnlockFunds", 2)
-	accountRepo.AssertNumberOfCalls(t, "UpdateBalance", 2)
+	accountRepo.AssertNumberOfCalls(t, "UpdateBalance", 4)
 }
 
 // ============================================================
@@ -309,7 +340,8 @@ func TestPlaceOrder_InsufficientFunds_ReturnsError(t *testing.T) {
 	ctx := context.Background()
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, "BTC-USD")
+	tradeRepo := NewMockTradeRepository()
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
 
 	order := &Order{
 		UserID:   uuid.New(),
@@ -338,7 +370,8 @@ func TestPlaceOrder_Success_CreatesOrder(t *testing.T) {
 	ctx := context.Background()
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, "BTC-USD")
+	tradeRepo := NewMockTradeRepository()
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
 
 	order := &Order{
 		UserID:   uuid.New(),
@@ -362,4 +395,101 @@ func TestPlaceOrder_Success_CreatesOrder(t *testing.T) {
 	assert.NotEqual(t, uuid.Nil, order.ID, "訂單應有 ID")
 	assert.Equal(t, StatusNew, order.Status, "空 OrderBook 的訂單狀態應為 NEW")
 	orderRepo.AssertCalled(t, "CreateOrder", mock.Anything, mock.Anything)
+}
+
+// ============================================================
+// Phase 1.5: 取消訂單 (Cancel Order)
+// ============================================================
+
+// TODO: 取消成功應解鎖剩餘資金並更新狀態
+func TestCancelOrder_Success_UnlocksFundsAndUpdatesStatus(t *testing.T) {
+	// Arrange
+	ctx := context.Background()
+	orderRepo := NewMockOrderRepository()
+	accountRepo := NewMockAccountRepository()
+	tradeRepo := NewMockTradeRepository()
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
+
+	orderID := uuid.New()
+	userID := uuid.New()
+	existingOrder := &Order{
+		ID:             orderID,
+		UserID:         userID,
+		Symbol:         "BTC-USD",
+		Side:           SideBuy,
+		Type:           TypeLimit,
+		Price:          decimal.NewFromInt(50000),
+		Quantity:       decimal.NewFromInt(10),
+		FilledQuantity: decimal.NewFromInt(3), // 已成交 3，剩餘 7
+		Status:         StatusPartiallyFilled,
+	}
+
+	orderRepo.On("GetOrder", ctx, orderID).Return(existingOrder, nil)
+	orderRepo.On("UpdateOrder", ctx, mock.Anything).Return(nil)
+	accountRepo.On("UnlockFunds", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	// Act
+	err := svc.CancelOrder(ctx, orderID, userID)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Equal(t, StatusCanceled, existingOrder.Status, "訂單狀態應為 CANCELLED")
+	accountRepo.AssertCalled(t, "UnlockFunds", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TODO: 取消已成交訂單應返回錯誤
+func TestCancelOrder_AlreadyFilled_ReturnsError(t *testing.T) {
+	// Arrange
+	ctx := context.Background()
+	orderRepo := NewMockOrderRepository()
+	accountRepo := NewMockAccountRepository()
+	tradeRepo := NewMockTradeRepository()
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
+
+	orderID := uuid.New()
+	userID := uuid.New()
+	filledOrder := &Order{
+		ID:             orderID,
+		UserID:         userID,
+		Status:         StatusFilled, // 已完全成交
+		FilledQuantity: decimal.NewFromInt(10),
+		Quantity:       decimal.NewFromInt(10),
+	}
+
+	orderRepo.On("GetOrder", ctx, orderID).Return(filledOrder, nil)
+
+	// Act
+	err := svc.CancelOrder(ctx, orderID, userID)
+
+	// Assert
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "無法取消")
+}
+
+// TODO: 取消其他用戶訂單應返回錯誤
+func TestCancelOrder_WrongUser_ReturnsError(t *testing.T) {
+	// Arrange
+	ctx := context.Background()
+	orderRepo := NewMockOrderRepository()
+	accountRepo := NewMockAccountRepository()
+	tradeRepo := NewMockTradeRepository()
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
+
+	orderID := uuid.New()
+	ownerID := uuid.New()
+	anotherUserID := uuid.New()
+	order := &Order{
+		ID:     orderID,
+		UserID: ownerID,
+		Status: StatusNew,
+	}
+
+	orderRepo.On("GetOrder", ctx, orderID).Return(order, nil)
+
+	// Act
+	err := svc.CancelOrder(ctx, orderID, anotherUserID)
+
+	// Assert
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "權限不足")
 }

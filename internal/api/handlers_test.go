@@ -19,11 +19,11 @@ import (
 /*
 === TDD TODO List: API Layer ===
 
-Step 4: API 整合測試
+Phase 4: API 整合測試 ✅ DONE
 - [x] 4.1 POST /orders 參數錯誤應返回 400
 - [x] 4.2 POST /orders 成功應返回 201
 
-Step 5: 訂單查詢 API
+Phase 5: 訂單查詢 API ✅ DONE
 - [x] 5.1 GET /orders/:id 應返回訂單詳情
 - [x] 5.2 GET /orders?user_id=xxx 應返回用戶訂單列表
 
@@ -61,6 +61,11 @@ func (m *MockExchangeService) GetOrdersByUser(ctx context.Context, userID uuid.U
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]*core.Order), args.Error(1)
+}
+
+func (m *MockExchangeService) CancelOrder(ctx context.Context, orderID, userID uuid.UUID) error {
+	args := m.Called(ctx, orderID, userID)
+	return args.Error(0)
 }
 
 func setupRouter(svc core.ExchangeService) *gin.Engine {
