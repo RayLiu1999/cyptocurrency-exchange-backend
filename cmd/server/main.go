@@ -8,8 +8,12 @@ import (
 	"github.com/RayLiu1999/exchange/internal/core"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
 	"github.com/RayLiu1999/exchange/internal/repository"
+	"github.com/RayLiu1999/exchange/internal/simulator"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	"go.uber.org/zap"
 )
 
@@ -31,15 +35,42 @@ func main() {
 	// 2. Repository
 	repo := repository.NewPostgresRepository(pool)
 
-	// 3. Service (內建撮合引擎)
-	svc := core.NewExchangeService(repo, repo, repo, repo, "BTC-USD")
+	// 3. WebSocket Handler (先建立，作為事件監聽者)
+	wsHandler := api.NewWebSocketHandler()
+	go wsHandler.Run()
+	// wsHandler.StartBroadcastingDummyData() // 已移除，改用 Real Data
 
-	// 4. HTTP Handler
-	handler := api.NewHandler(svc)
+	// 4. Service (內建撮合引擎，注入 repo 作為所有的 Repository 實現)
+	svc := core.NewExchangeService(repo, repo, repo, repo, repo, "BTC-USD", wsHandler)
+	// 4-1. Simulator
+	sim := simulator.NewService(svc)
 
-	// 5. 啟動伺服器
+	// 5. HTTP Handler
+	handler := api.NewHandler(svc, sim)
+
+	// 6. 啟動伺服器
 	r := gin.Default()
-	handler.RegisterRoutes(r)
+
+	// CORS Setup
+	config := cors.DefaultConfig()
+	config.AllowAllOrigins = true
+	config.AllowCredentials = true
+	config.AddAllowHeaders("Authorization")
+	r.Use(cors.New(config))
+
+	// API v1 Routing Group
+	v1 := r.Group("/api/v1")
+	handler.RegisterRoutes(v1)
+
+	// WebSocket Route (Register at root to match frontend expectation: ws://localhost:8080/ws)
+	r.GET("/ws", wsHandler.HandleWS)
+
+	// Swagger Documentation (Design-First)
+	// 提供 docs 目錄，以便支援多個 YAML 檔案的參照
+	r.Static("/docs", "docs")
+	// 設定 Swagger UI 讀取該檔案
+	url := ginSwagger.URL("http://localhost:8080/docs/swagger.yaml")
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, url))
 
 	logger.Info("🚀 伺服器啟動", zap.String("port", ":8080"))
 	if err := r.Run(":8080"); err != nil {
