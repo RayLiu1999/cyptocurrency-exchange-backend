@@ -1,0 +1,140 @@
+/api/v1/orders:
+  get:
+    consumes:
+      - application/json
+    description: 取得特定用戶的所有訂單
+    parameters:
+      - description: 用戶 ID (UUID)
+        in: query
+        name: user_id
+        required: true
+        type: string
+    produces:
+      - application/json
+    responses:
+      "200":
+        description: OK
+        schema:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+      "400":
+        description: Bad Request
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      "500":
+        description: Internal Server Error
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+    summary: 取得用戶訂單 (List Orders)
+    tags:
+      - Orders
+  post:
+    consumes:
+      - application/json
+    description: 建立一筆新的買單或賣單
+    parameters:
+      - description: 訂單資訊
+        in: body
+        name: order
+        required: true
+        schema:
+          $ref: "../definitions.yaml#/api.placeOrderRequest"
+    produces:
+      - application/json
+    responses:
+      "201":
+        description: Created
+        schema:
+          additionalProperties: true
+          type: object
+      "400":
+        description: Bad Request
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      "500":
+        description: Internal Server Error
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+    summary: 下單 (Place Order)
+    tags:
+      - Orders
+/api/v1/orders/{id}:
+  delete:
+    consumes:
+      - application/json
+    description: 取消尚未完全成交的訂單
+    parameters:
+      - description: 訂單 ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 用戶 ID (Header)
+        in: header
+        name: X-User-ID
+        type: string
+      - description: 用戶 ID (Query)
+        in: query
+        name: user_id
+        type: string
+    produces:
+      - application/json
+    responses:
+      "200":
+        description: OK
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      "400":
+        description: Bad Request
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+    summary: 取消訂單 (Cancel Order)
+    tags:
+      - Orders
+  get:
+    consumes:
+      - application/json
+    description: 根據 ID 查詢訂單詳情
+    parameters:
+      - description: 訂單 ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+    produces:
+      - application/json
+    responses:
+      "200":
+        description: OK
+        schema:
+          additionalProperties: true
+          type: object
+      "400":
+        description: Bad Request
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      "404":
+        description: Not Found
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+    summary: 取得訂單 (Get Order)
+    tags:
+      - Orders

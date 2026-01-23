@@ -1,0 +1,119 @@
+/api/v1/test/join:
+  post:
+    description: 匿名加入測試戰場，自動建立帳戶並發放 100,000 USD, 10 BTC, 100 ETH 測試金
+    produces:
+      - application/json
+    responses:
+      "201":
+        description: Created
+        schema:
+          additionalProperties: true
+          type: object
+      "500":
+        description: Internal Server Error
+    summary: 匿名加入 (Join Arena)
+    tags:
+      - Testing
+/api/v1/simulation/start:
+  post:
+    consumes:
+      - application/json
+    description: 啟動模擬交易 (可設定頻率與無限模式)
+    parameters:
+      - description: 模擬設定
+        in: body
+        name: config
+        required: false
+        schema:
+          $ref: "../definitions.yaml#/api.startSimulationRequest"
+    produces:
+      - application/json
+    responses:
+      "202":
+        description: Accepted
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      "400":
+        description: Bad Request
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      "503":
+        description: Service Unavailable
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+    summary: 啟動模擬交易 (Start Simulation)
+    tags:
+      - Simulation
+/api/v1/simulation/stop:
+  post:
+    description: 停止模擬交易
+    produces:
+      - application/json
+    responses:
+      "200":
+        description: OK
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      "400":
+        description: Bad Request
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      "503":
+        description: Service Unavailable
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+    summary: 停止模擬交易 (Stop Simulation)
+    tags:
+      - Simulation
+/api/v1/simulation/status:
+  get:
+    description: 取得模擬狀態
+    produces:
+      - application/json
+    responses:
+      "200":
+        description: OK
+        schema:
+          $ref: "../definitions.yaml#/api.simulationStatus"
+      "503":
+        description: Service Unavailable
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+    summary: 取得模擬狀態 (Get Simulation Status)
+    tags:
+      - Simulation
+/api/v1/simulation/data:
+  delete:
+    description: 清除交易資料 (訂單與成交)
+    produces:
+      - application/json
+    responses:
+      "200":
+        description: OK
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      "500":
+        description: Internal Server Error
+    schema:
+      additionalProperties:
+        type: string
+      type: object
+    summary: 清除交易資料 (Clear Simulation Data)
+    tags:
+      - Simulation

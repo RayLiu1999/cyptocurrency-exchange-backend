@@ -1,0 +1,138 @@
+api.placeOrderRequest:
+  properties:
+    price:
+      description: 市價單可不傳
+      type: number
+    quantity:
+      type: number
+    side:
+      enum:
+        - BUY
+        - SELL
+      type: string
+    symbol:
+      type: string
+      description: 交易對 (支援 BTC-USD, ETH-USD)
+      default: BTC-USD
+    type:
+      enum:
+        - LIMIT
+        - MARKET
+      type: string
+    user_id:
+      type: string
+  required:
+    - quantity
+    - side
+    - symbol
+    - type
+    - user_id
+  type: object
+api.startSimulationRequest:
+  properties:
+    symbol:
+      type: string
+      description: 交易對 (支援 BTC-USD, ETH-USD)
+      default: BTC-USD
+    base_price:
+      type: number
+      description: 參考價格
+      default: 30000
+    num_traders:
+      type: integer
+      description: 交易者數量
+      default: 20
+    total_tx:
+      type: integer
+      description: 交易筆數 (非無限模式)
+      default: 100
+    worker_count:
+      type: integer
+      description: 工作執行緒數量
+      default: 1
+    infinite:
+      type: boolean
+      description: 無限模式，持續運行直到手動停止
+      default: false
+    interval_ms:
+      type: integer
+      description: 每筆訂單間隔 (毫秒)
+      default: 2000
+  type: object
+api.simulationStatus:
+  properties:
+    running:
+      type: boolean
+    symbol:
+      type: string
+    total_tx:
+      type: integer
+    infinite:
+      type: boolean
+    sent_tx:
+      type: integer
+    started_at:
+      type: string
+      format: date-time
+    finished_at:
+      type: string
+      format: date-time
+    message:
+      type: string
+  type: object
+core.Trade:
+  properties:
+    id:
+      type: string
+      format: uuid
+    symbol:
+      type: string
+    price:
+      type: number
+    quantity:
+      type: number
+    maker_order_id:
+      type: string
+      format: uuid
+    taker_order_id:
+      type: string
+      format: uuid
+    created_at:
+      type: string
+      format: date-time
+  type: object
+core.KLine:
+  properties:
+    close:
+      type: number
+    high:
+      type: number
+    low:
+      type: number
+    open:
+      type: number
+    time:
+      type: string
+    volume:
+      type: number
+  type: object
+matching.OrderBookLevel:
+  properties:
+    price:
+      type: number
+    quantity:
+      type: number
+  type: object
+matching.OrderBookSnapshot:
+  properties:
+    asks:
+      items:
+        $ref: "#/matching.OrderBookLevel"
+      type: array
+    bids:
+      items:
+        $ref: "#/matching.OrderBookLevel"
+      type: array
+    symbol:
+      type: string
+  type: object

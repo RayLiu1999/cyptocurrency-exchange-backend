@@ -71,6 +71,14 @@ install-tools: ## 安裝開發工具
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 	@echo "✅ 工具安裝完成"
 
+install-swag: ## 安裝 Swagger 工具
+	@echo "🔧 安裝 Swag CLI..."
+	go install github.com/swaggo/swag/cmd/swag@latest
+	@echo "✅ Swag 安裝完成"
+
+swagger: ## 產生 Swagger 文件 (Manual Mode)
+	@echo "📚 Swagger 文件為 Design-First 模式，請直接編輯 docs/swagger.yaml"
+
 lint: ## 執行程式碼檢查
 	@echo "🔍 執行程式碼檢查..."
 	golangci-lint run ./...
@@ -91,5 +99,13 @@ docker-build: ## 建立 Docker 映像檔
 	@echo "🐳 建立 Docker 映像檔..."
 	docker build -t $(APP_NAME) .
 	@echo "✅ 映像檔建立完成"
+
+deploy-aws: ## [AWS] 使用 Ansible 部署至 AWS ECS
+	@echo "☁️  開始部署至 AWS..."
+	ansible-playbook infra/ansible/playbook.yml
+
+destroy-aws: ## [AWS] 銷毀 AWS 基礎設施 (省錢專用)
+	@echo "💣 銷毀 AWS 資源..."
+	ansible-playbook infra/ansible/playbook.yml --tags destroy
 
 .DEFAULT_GOAL := help

@@ -1,0 +1,37 @@
+basePath: /
+host: localhost:8080
+info:
+  contact: {}
+  description: High-performance cryptocurrency exchange API with matching engine.
+  title: Crypto Exchange API
+  version: "1.0"
+paths:
+  /api/v1/orders:
+    $ref: "./paths/orders.yaml#/api/v1/orders"
+  /api/v1/orders/{id}:
+    $ref: "./paths/orders.yaml#/api/v1/orders/{id}"
+  /api/v1/orderbook:
+    $ref: "./paths/market.yaml#/api/v1/orderbook"
+  /api/v1/klines:
+    $ref: "./paths/market.yaml#/api/v1/klines"
+  /api/v1/trades:
+    $ref: "./paths/market.yaml#/api/v1/trades"
+  /api/v1/test/join:
+    $ref: "./paths/simulation.yaml#/api/v1/test/join"
+  /api/v1/simulation/start:
+    $ref: "./paths/simulation.yaml#/api/v1/simulation/start"
+  /api/v1/simulation/stop:
+    $ref: "./paths/simulation.yaml#/api/v1/simulation/stop"
+  /api/v1/simulation/status:
+    $ref: "./paths/simulation.yaml#/api/v1/simulation/status"
+  /api/v1/simulation/data:
+    $ref: "./paths/simulation.yaml#/api/v1/simulation/data"
+  /api/v1/accounts:
+    $ref: "./paths/accounts.yaml#/api/v1/accounts"
+  /ws:
+    $ref: "./paths/ws.yaml#/ws"
+
+schemes:
+  - http
+  - ws
+swagger: "2.0"

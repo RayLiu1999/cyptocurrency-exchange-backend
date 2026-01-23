@@ -1,0 +1,88 @@
+/api/v1/orderbook:
+  get:
+    description: 取得即時訂單簿快照 (Limit 20)
+    parameters:
+      - description: 交易對 (例如 BTC-USD, ETH-USD)
+        in: query
+        name: symbol
+        required: false
+        type: string
+        default: BTC-USD
+    produces:
+      - application/json
+    responses:
+      "200":
+        description: OK
+        schema:
+          $ref: "../definitions.yaml#/matching.OrderBookSnapshot"
+      "500":
+        description: Internal Server Error
+    summary: 取得訂單簿 (Get OrderBook)
+    tags:
+      - Market Data
+/api/v1/klines:
+  get:
+    description: 取得 K 線 (OHLC) 歷史數據
+    parameters:
+      - description: 交易對 (例如 BTC-USD, ETH-USD)
+        in: query
+        name: symbol
+        required: false
+        type: string
+        default: BTC-USD
+      - description: K 線週期 (1m, 1h, 1d)
+        in: query
+        name: interval
+        required: false
+        type: string
+        default: 1m
+      - description: 取得筆數
+        in: query
+        name: limit
+        required: false
+        type: integer
+        default: 100
+    produces:
+      - application/json
+    responses:
+      "200":
+        description: OK
+        schema:
+          items:
+            $ref: "../definitions.yaml#/core.KLine"
+          type: array
+      "500":
+        description: Internal Server Error
+    summary: 取得 K 線 (Get KLines)
+    tags:
+      - Market Data
+/api/v1/trades:
+  get:
+    description: 取得近期市場成交記錄
+    parameters:
+      - description: 交易對 (例如 BTC-USD, ETH-USD)
+        in: query
+        name: symbol
+        required: false
+        type: string
+        default: BTC-USD
+      - description: 取得筆數
+        in: query
+        name: limit
+        required: false
+        type: integer
+        default: 50
+    produces:
+      - application/json
+    responses:
+      "200":
+        description: OK
+        schema:
+          items:
+            $ref: "../definitions.yaml#/core.Trade"
+          type: array
+      "500":
+        description: Internal Server Error
+    summary: 取得近期成交 (Get Recent Trades)
+    tags:
+      - Market Data

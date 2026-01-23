@@ -1,0 +1,13 @@
+/ws:
+  get:
+    description: 連接 WebSocket 以接收即時成交資訊 (目前無需認證)
+    produces:
+      - application/json
+    responses:
+      "101":
+        description: Switching Protocols
+      "400":
+        description: Bad Request
+    summary: 連接 WebSocket (Connect WebSocket)
+    tags:
+      - WebSocket
