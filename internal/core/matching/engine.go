@@ -2,6 +2,7 @@ package matching
 
 import (
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -79,6 +80,7 @@ func (e *Engine) matchBuyOrder(buyOrder *Order) []*Trade {
 			TakerOrderID: buyOrder.ID,
 			Price:        bestAsk.Price, // 成交價格 = Maker 價格
 			Quantity:     matchQty,
+			CreatedAt:    time.Now().UTC(),
 		}
 		trades = append(trades, trade)
 
@@ -130,6 +132,7 @@ func (e *Engine) matchSellOrder(sellOrder *Order) []*Trade {
 			TakerOrderID: sellOrder.ID,
 			Price:        bestBid.Price, // 成交價格 = Maker 價格
 			Quantity:     matchQty,
+			CreatedAt:    time.Now().UTC(),
 		}
 		trades = append(trades, trade)
 
@@ -149,4 +152,41 @@ func (e *Engine) matchSellOrder(sellOrder *Order) []*Trade {
 	}
 
 	return trades
+}
+
+// GetOrderBookSnapshot 取得訂單簿快照 (Thread-Safe)
+// depth: 每個方向返回的深度層級數量 (0 表示返回全部)
+func (e *Engine) GetOrderBookSnapshot(depth int) *OrderBookSnapshot {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	snapshot := &OrderBookSnapshot{
+		Symbol: e.orderBook.Symbol(),
+		Bids:   make([]OrderBookLevel, 0),
+		Asks:   make([]OrderBookLevel, 0),
+	}
+
+	// 處理買單 (Bids)
+	for i, order := range e.orderBook.bids {
+		if depth > 0 && i >= depth {
+			break
+		}
+		snapshot.Bids = append(snapshot.Bids, OrderBookLevel{
+			Price:    order.Price,
+			Quantity: order.Quantity,
+		})
+	}
+
+	// 處理賣單 (Asks)
+	for i, order := range e.orderBook.asks {
+		if depth > 0 && i >= depth {
+			break
+		}
+		snapshot.Asks = append(snapshot.Asks, OrderBookLevel{
+			Price:    order.Price,
+			Quantity: order.Quantity,
+		})
+	}
+
+	return snapshot
 }

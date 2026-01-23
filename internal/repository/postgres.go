@@ -169,6 +169,14 @@ func (r *PostgresRepository) GetOrdersByUser(ctx context.Context, userID uuid.UU
 	return orders, nil
 }
 
+func (r *PostgresRepository) DeleteAllOrders(ctx context.Context) error {
+	_, err := r.getExecutor(ctx).Exec(ctx, "DELETE FROM orders")
+	if err != nil {
+		return fmt.Errorf("failed to delete orders: %w", err)
+	}
+	return nil
+}
+
 // --- AccountRepository Implementation ---
 
 func (r *PostgresRepository) GetAccount(ctx context.Context, userID uuid.UUID, currency string) (*core.Account, error) {
@@ -277,6 +285,37 @@ func (r *PostgresRepository) UnlockFunds(ctx context.Context, userID uuid.UUID, 
 	return nil
 }
 
+func (r *PostgresRepository) GetAccountsByUser(ctx context.Context, userID uuid.UUID) ([]*core.Account, error) {
+	query := `
+		SELECT id, user_id, currency, balance, locked, created_at, updated_at
+		FROM accounts WHERE user_id = $1
+	`
+	rows, err := r.getExecutor(ctx).Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get accounts by user: %w", err)
+	}
+	defer rows.Close()
+
+	var accounts []*core.Account
+	for rows.Next() {
+		var acc core.Account
+		err := rows.Scan(
+			&acc.ID,
+			&acc.UserID,
+			&acc.Currency,
+			&acc.Balance,
+			&acc.Locked,
+			&acc.CreatedAt,
+			&acc.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan account: %w", err)
+		}
+		accounts = append(accounts, &acc)
+	}
+	return accounts, nil
+}
+
 // --- TradeRepository Implementation ---
 
 func (r *PostgresRepository) CreateTrade(ctx context.Context, trade *matching.Trade) error {
@@ -294,6 +333,103 @@ func (r *PostgresRepository) CreateTrade(ctx context.Context, trade *matching.Tr
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create trade: %w", err)
+	}
+	return nil
+}
+
+func (r *PostgresRepository) GetKLines(ctx context.Context, symbol string, interval string, limit int) ([]*core.KLine, error) {
+	// Standardize interval to valid date_trunc unit or default to minute
+	validUnit := "minute"
+	if interval == "1h" {
+		validUnit = "hour"
+	} else if interval == "1d" {
+		validUnit = "day"
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			date_trunc($1, created_at) as bucket,
+			(array_agg(price ORDER BY created_at ASC))[1] as open,
+			MAX(price) as high,
+			MIN(price) as low,
+			(array_agg(price ORDER BY created_at DESC))[1] as close,
+			SUM(quantity) as volume
+		FROM trades
+		WHERE symbol = $2
+		GROUP BY bucket
+		ORDER BY bucket DESC
+		LIMIT $3
+	`)
+
+	rows, err := r.getExecutor(ctx).Query(ctx, query, validUnit, symbol, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get klines: %w", err)
+	}
+	defer rows.Close()
+
+	var klines []*core.KLine
+	for rows.Next() {
+		var k core.KLine
+		err := rows.Scan(
+			&k.Time,
+			&k.Open,
+			&k.High,
+			&k.Low,
+			&k.Close,
+			&k.Volume,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan kline: %w", err)
+		}
+		klines = append(klines, &k)
+	}
+
+	// Reverse to return ascending time order
+	for i, j := 0, len(klines)-1; i < j; i, j = i+1, j-1 {
+		klines[i], klines[j] = klines[j], klines[i]
+	}
+
+	return klines, nil
+}
+
+func (r *PostgresRepository) GetRecentTrades(ctx context.Context, symbol string, limit int) ([]*matching.Trade, error) {
+	query := `
+		SELECT id, symbol, maker_order_id, taker_order_id, price, quantity, created_at
+		FROM trades
+		WHERE symbol = $1
+		ORDER BY created_at DESC
+		LIMIT $2
+	`
+	rows, err := r.getExecutor(ctx).Query(ctx, query, symbol, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recent trades: %w", err)
+	}
+	defer rows.Close()
+
+	var trades []*matching.Trade
+	for rows.Next() {
+		var t matching.Trade
+		err := rows.Scan(
+			&t.ID,
+			&t.Symbol,
+			&t.MakerOrderID,
+			&t.TakerOrderID,
+			&t.Price,
+			&t.Quantity,
+			&t.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan trade: %w", err)
+		}
+		trades = append(trades, &t)
+	}
+	return trades, nil
+}
+
+func (r *PostgresRepository) DeleteAllTrades(ctx context.Context) error {
+	_, err := r.getExecutor(ctx).Exec(ctx, "DELETE FROM trades")
+	if err != nil {
+		return fmt.Errorf("failed to delete trades: %w", err)
 	}
 	return nil
 }

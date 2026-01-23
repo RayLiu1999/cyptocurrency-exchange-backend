@@ -1,6 +1,8 @@
 package matching
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
@@ -54,10 +56,32 @@ func NewMarketOrder(side OrderSide, quantity decimal.Decimal) *Order {
 
 // Trade 成交記錄
 type Trade struct {
-	ID           uuid.UUID
-	Symbol       string
-	MakerOrderID uuid.UUID
-	TakerOrderID uuid.UUID
-	Price        decimal.Decimal
-	Quantity     decimal.Decimal
+	ID           uuid.UUID       `json:"id"`
+	Symbol       string          `json:"symbol"`
+	MakerOrderID uuid.UUID       `json:"maker_order_id"`
+	TakerOrderID uuid.UUID       `json:"taker_order_id"`
+	Price        decimal.Decimal `json:"price"`
+	Quantity     decimal.Decimal `json:"quantity"`
+	CreatedAt    time.Time       `json:"created_at"`
+}
+
+// OrderBookLevel 訂單簿深度層級
+type OrderBookLevel struct {
+	Price    decimal.Decimal `json:"price"`
+	Quantity decimal.Decimal `json:"quantity"`
+}
+
+// OrderBookSnapshot 訂單簿快照 (用於 API 回傳)
+type OrderBookSnapshot struct {
+	Symbol string           `json:"symbol"`
+	Bids   []OrderBookLevel `json:"bids"` // 買單 (Price DESC)
+	Asks   []OrderBookLevel `json:"asks"` // 賣單 (Price ASC)
+}
+
+func NewOrderBookSnapshot(symbol string) *OrderBookSnapshot {
+	return &OrderBookSnapshot{
+		Symbol: symbol,
+		Bids:   make([]OrderBookLevel, 0),
+		Asks:   make([]OrderBookLevel, 0),
+	}
 }

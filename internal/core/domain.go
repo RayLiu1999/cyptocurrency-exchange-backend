@@ -66,3 +66,12 @@ type Trade struct {
 	Quantity     decimal.Decimal `json:"quantity"`
 	CreatedAt    time.Time       `json:"created_at"`
 }
+
+type KLine struct {
+	Time   time.Time       `json:"time"`
+	Open   decimal.Decimal `json:"open"`
+	High   decimal.Decimal `json:"high"`
+	Low    decimal.Decimal `json:"low"`
+	Close  decimal.Decimal `json:"close"`
+	Volume decimal.Decimal `json:"volume"`
+}

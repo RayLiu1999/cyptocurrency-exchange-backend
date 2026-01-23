@@ -26,6 +26,16 @@
   - 包含單元測試與 API 整合測試。
 
 ---
+```mermaid
+graph TD
+    A[使用者 / 模擬器] -->|1. 下單 POST /orders| B(Go Backend)
+    B -->|2. 撮合引擎| C{是否有成交?}
+    C -->|是| D[產生 Trade]
+    C -->|否| E[保留在 OrderBook]
+    
+    D -->|即時推播| F[前端 WebSocket - 更新 K線/成交紀錄]
+    B -->|API 請求| G[GET /orderbook - 更新深度圖/掛單表]
+```
 
 ## 🛠️ 技術堆疊
 

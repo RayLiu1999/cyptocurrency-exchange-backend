@@ -13,17 +13,26 @@ type DBTransaction interface {
 	ExecTx(ctx context.Context, fn func(ctx context.Context) error) error
 }
 
+// TradeEventListener defines the interface for trade events
+type TradeEventListener interface {
+	OnTrade(trade *matching.Trade)
+}
+
 // OrderRepository defines the interface for order persistence
 type OrderRepository interface {
 	CreateOrder(ctx context.Context, order *Order) error
 	GetOrder(ctx context.Context, id uuid.UUID) (*Order, error)
 	UpdateOrder(ctx context.Context, order *Order) error
 	GetOrdersByUser(ctx context.Context, userID uuid.UUID) ([]*Order, error)
+	DeleteAllOrders(ctx context.Context) error
 }
 
 // TradeRepository defines the interface for trade persistence
 type TradeRepository interface {
 	CreateTrade(ctx context.Context, trade *matching.Trade) error
+	GetKLines(ctx context.Context, symbol string, interval string, limit int) ([]*KLine, error)
+	GetRecentTrades(ctx context.Context, symbol string, limit int) ([]*matching.Trade, error)
+	DeleteAllTrades(ctx context.Context) error
 }
 
 // AccountRepository defines the interface for account persistence
@@ -33,6 +42,7 @@ type AccountRepository interface {
 	UpdateBalance(ctx context.Context, userID uuid.UUID, currency string, amount decimal.Decimal) error
 	LockFunds(ctx context.Context, userID uuid.UUID, currency string, amount decimal.Decimal) error
 	UnlockFunds(ctx context.Context, userID uuid.UUID, currency string, amount decimal.Decimal) error
+	GetAccountsByUser(ctx context.Context, userID uuid.UUID) ([]*Account, error)
 }
 
 // UserRepository defines the interface for user persistence
@@ -47,4 +57,10 @@ type ExchangeService interface {
 	GetOrder(ctx context.Context, id uuid.UUID) (*Order, error)
 	GetOrdersByUser(ctx context.Context, userID uuid.UUID) ([]*Order, error)
 	CancelOrder(ctx context.Context, orderID, userID uuid.UUID) error
+	GetOrderBook(ctx context.Context, symbol string) (*matching.OrderBookSnapshot, error)
+	RegisterAnonymousUser(ctx context.Context) (*User, []*Account, error)
+	GetBalances(ctx context.Context, userID uuid.UUID) ([]*Account, error)
+	GetKLines(ctx context.Context, symbol string, interval string, limit int) ([]*KLine, error)
+	GetRecentTrades(ctx context.Context, symbol string, limit int) ([]*matching.Trade, error)
+	ClearSimulationData(ctx context.Context) error
 }

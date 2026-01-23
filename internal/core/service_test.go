@@ -82,6 +82,11 @@ func (m *MockOrderRepository) GetOrdersByUser(ctx context.Context, userID uuid.U
 	return args.Get(0).([]*Order), args.Error(1)
 }
 
+func (m *MockOrderRepository) DeleteAllOrders(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 type MockAccountRepository struct {
 	mock.Mock
 }
@@ -118,6 +123,14 @@ func (m *MockAccountRepository) UnlockFunds(ctx context.Context, userID uuid.UUI
 	return args.Error(0)
 }
 
+func (m *MockAccountRepository) GetAccountsByUser(ctx context.Context, userID uuid.UUID) ([]*Account, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*Account), args.Error(1)
+}
+
 type MockDBTransaction struct{}
 
 func (m *MockDBTransaction) ExecTx(ctx context.Context, fn func(ctx context.Context) error) error {
@@ -138,6 +151,45 @@ func (m *MockTradeRepository) CreateTrade(ctx context.Context, trade *matching.T
 	return args.Error(0)
 }
 
+func (m *MockTradeRepository) GetKLines(ctx context.Context, symbol string, interval string, limit int) ([]*KLine, error) {
+	args := m.Called(ctx, symbol, interval, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*KLine), args.Error(1)
+}
+
+func (m *MockTradeRepository) GetRecentTrades(ctx context.Context, symbol string, limit int) ([]*matching.Trade, error) {
+	args := m.Called(ctx, symbol, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*matching.Trade), args.Error(1)
+}
+
+func (m *MockTradeRepository) DeleteAllTrades(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+// MockUserRepository implementation
+type MockUserRepository struct {
+	mock.Mock
+}
+
+func (m *MockUserRepository) CreateUser(ctx context.Context, user *User) error {
+	args := m.Called(ctx, user)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) GetUserByEmail(ctx context.Context, email string) (*User, error) {
+	args := m.Called(ctx, email)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*User), args.Error(1)
+}
+
 // ============================================================
 // Step 1: Maker 訂單狀態更新
 // ============================================================
@@ -149,7 +201,7 @@ func TestProcessTrade_MakerFilledQuantityIncreases(t *testing.T) {
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
 	tradeRepo := NewMockTradeRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil)
 
 	makerOrderID := uuid.New()
 	makerOrder := &Order{
@@ -199,7 +251,7 @@ func TestProcessTrade_MakerStatusUpdated(t *testing.T) {
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
 	tradeRepo := NewMockTradeRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil)
 
 	makerOrderID := uuid.New()
 	makerOrder := &Order{
@@ -253,7 +305,7 @@ func TestSettleTrade_BuyerUnlocksUSDAndReceivesBTC(t *testing.T) {
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
 	tradeRepo := NewMockTradeRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil)
 
 	takerOrder := &Order{
 		ID:     uuid.New(),
@@ -296,7 +348,7 @@ func TestSettleTrade_SellerUnlocksBTCAndReceivesUSD(t *testing.T) {
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
 	tradeRepo := NewMockTradeRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil)
 
 	takerOrder := &Order{
 		ID:     uuid.New(),
@@ -341,7 +393,7 @@ func TestPlaceOrder_InsufficientFunds_ReturnsError(t *testing.T) {
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
 	tradeRepo := NewMockTradeRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil)
 
 	order := &Order{
 		UserID:   uuid.New(),
@@ -371,7 +423,7 @@ func TestPlaceOrder_Success_CreatesOrder(t *testing.T) {
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
 	tradeRepo := NewMockTradeRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil)
 
 	order := &Order{
 		UserID:   uuid.New(),
@@ -408,7 +460,7 @@ func TestCancelOrder_Success_UnlocksFundsAndUpdatesStatus(t *testing.T) {
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
 	tradeRepo := NewMockTradeRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil)
 
 	orderID := uuid.New()
 	userID := uuid.New()
@@ -444,7 +496,7 @@ func TestCancelOrder_AlreadyFilled_ReturnsError(t *testing.T) {
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
 	tradeRepo := NewMockTradeRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil)
 
 	orderID := uuid.New()
 	userID := uuid.New()
@@ -473,7 +525,7 @@ func TestCancelOrder_WrongUser_ReturnsError(t *testing.T) {
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
 	tradeRepo := NewMockTradeRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockDBTransaction{}, "BTC-USD")
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil)
 
 	orderID := uuid.New()
 	ownerID := uuid.New()

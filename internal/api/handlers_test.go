@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/RayLiu1999/exchange/internal/core"
+	"github.com/RayLiu1999/exchange/internal/core/matching"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -68,10 +69,54 @@ func (m *MockExchangeService) CancelOrder(ctx context.Context, orderID, userID u
 	return args.Error(0)
 }
 
+func (m *MockExchangeService) GetOrderBook(ctx context.Context, symbol string) (*matching.OrderBookSnapshot, error) {
+	args := m.Called(ctx, symbol)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*matching.OrderBookSnapshot), args.Error(1)
+}
+
+func (m *MockExchangeService) RegisterAnonymousUser(ctx context.Context) (*core.User, []*core.Account, error) {
+	args := m.Called(ctx)
+	user, _ := args.Get(0).(*core.User)
+	accounts, _ := args.Get(1).([]*core.Account)
+	return user, accounts, args.Error(2)
+}
+
+func (m *MockExchangeService) GetBalances(ctx context.Context, userID uuid.UUID) ([]*core.Account, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*core.Account), args.Error(1)
+}
+
+func (m *MockExchangeService) GetKLines(ctx context.Context, symbol string, interval string, limit int) ([]*core.KLine, error) {
+	args := m.Called(ctx, symbol, interval, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*core.KLine), args.Error(1)
+}
+
+func (m *MockExchangeService) GetRecentTrades(ctx context.Context, symbol string, limit int) ([]*matching.Trade, error) {
+	args := m.Called(ctx, symbol, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*matching.Trade), args.Error(1)
+}
+
+func (m *MockExchangeService) ClearSimulationData(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 func setupRouter(svc core.ExchangeService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	handler := NewHandler(svc)
+	handler := NewHandler(svc, nil)
 	handler.RegisterRoutes(r)
 	return r
 }
