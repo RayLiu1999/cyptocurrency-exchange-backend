@@ -31,7 +31,7 @@ var (
 
 func init() {
 	flag.StringVar(&dbURL, "db", "postgres://postgres:123qwe@localhost:5432/exchange?sslmode=disable", "Database URL")
-	flag.StringVar(&apiURL, "api", "http://localhost:8080", "API URL")
+	flag.StringVar(&apiURL, "api", "http://localhost:8080/api/v1", "API URL")
 	flag.IntVar(&totalTx, "tx", 10000, "Total transactions to simulate")
 	flag.Parse()
 
@@ -118,16 +118,16 @@ func runSimulation(ctx context.Context, traders []Trader) {
 	priceMu := sync.Mutex{}
 
 	// Update price periodically (Random Walk)
-	// Use child context for walker
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	// 注意：不能在這裡 cancel 傳入的 ctx，否則會中斷所有 workers
+	walkCtx, cancelWalk := context.WithCancel(context.Background())
+	defer cancelWalk()
 
 	go func() {
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-walkCtx.Done():
 				return
 			case <-ticker.C:
 				priceMu.Lock()
@@ -272,7 +272,7 @@ func placeOrder(t Trader, side, oType string, price float64, qty decimal.Decimal
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		// log.Printf("Request failed: %v", err)
+		log.Printf("❌ 訂單提交失敗: %v", err)
 		return
 	}
 	defer resp.Body.Close()
@@ -281,6 +281,6 @@ func placeOrder(t Trader, side, oType string, price float64, qty decimal.Decimal
 	if resp.StatusCode != 201 && resp.StatusCode != 200 {
 		var respBody map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&respBody)
-		// log.Printf("Order failed: %d, Error: %v", resp.StatusCode, respBody)
+		log.Printf("❌ 訂單被拒絕 [%d]: %v", resp.StatusCode, respBody)
 	}
 }

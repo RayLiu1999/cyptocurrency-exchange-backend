@@ -16,20 +16,24 @@ import (
 type ExchangeServiceImpl struct {
 	orderRepo     OrderRepository
 	accountRepo   AccountRepository
-	tradeRepo     TradeRepository // 新增
+	tradeRepo     TradeRepository
+	userRepo      UserRepository // 新增
+	tradeListener TradeEventListener
 	txManager     DBTransaction
 	engineManager *matching.EngineManager
 }
 
 // NewExchangeService 建立交易所服務
-func NewExchangeService(orderRepo OrderRepository, accountRepo AccountRepository, tradeRepo TradeRepository, txManager DBTransaction, defaultSymbol string) *ExchangeServiceImpl {
+func NewExchangeService(orderRepo OrderRepository, accountRepo AccountRepository, tradeRepo TradeRepository, userRepo UserRepository, txManager DBTransaction, defaultSymbol string, tradeListener TradeEventListener) *ExchangeServiceImpl {
 	manager := matching.NewEngineManager()
 	// 預先建立預設交易對的 Engine
 	manager.GetEngine(defaultSymbol)
 	return &ExchangeServiceImpl{
 		orderRepo:     orderRepo,
 		accountRepo:   accountRepo,
-		tradeRepo:     tradeRepo, // 注入
+		tradeRepo:     tradeRepo,
+		userRepo:      userRepo, // 注入
+		tradeListener: tradeListener,
 		txManager:     txManager,
 		engineManager: manager,
 	}
@@ -40,7 +44,8 @@ var _ ExchangeService = (*ExchangeServiceImpl)(nil)
 
 // PlaceOrder 處理下單請求
 func (s *ExchangeServiceImpl) PlaceOrder(ctx context.Context, order *Order) error {
-	// 0. 精度處理 (DB 限制為 8 位小數)
+	// 0. 規格化處理
+	order.Symbol = strings.ToUpper(order.Symbol)
 	order.Price = order.Price.Round(8)
 	order.Quantity = order.Quantity.Round(8)
 
@@ -182,6 +187,11 @@ func (s *ExchangeServiceImpl) ProcessTrade(ctx context.Context, trade *matching.
 		return fmt.Errorf("建立成交記錄失敗: %w", err)
 	}
 
+	// 7. 發送成交事件 (如果有設定監聽器)
+	if s.tradeListener != nil {
+		s.tradeListener.OnTrade(trade)
+	}
+
 	return nil
 }
 
@@ -313,9 +323,121 @@ func (s *ExchangeServiceImpl) calculateUnlockAmount(order *Order, remainingQty d
 }
 
 func (s *ExchangeServiceImpl) splitSymbol(symbol string) (base, quote string) {
+	symbol = strings.ToUpper(symbol)
 	parts := strings.Split(symbol, "-")
 	if len(parts) == 2 {
 		return parts[0], parts[1]
 	}
 	return "BTC", "USD"
+}
+
+// GetOrderBook 取得即時訂單簿
+func (s *ExchangeServiceImpl) GetOrderBook(ctx context.Context, symbol string) (*matching.OrderBookSnapshot, error) {
+	// 1. 取得對應的引擎
+	engine := s.engineManager.GetEngine(symbol)
+	if engine == nil {
+		// 為了簡化，如果引擎不存在就創建一個新的 (或返回錯誤)
+		// 這裡假設這是一個 valid symbol
+		return matching.NewOrderBookSnapshot(symbol), nil
+	}
+
+	// 2. 取得快照 (限制深度 20)
+	return engine.GetOrderBookSnapshot(20), nil
+}
+
+// RegisterAnonymousUser 建立匿名用戶並發放測試金
+func (s *ExchangeServiceImpl) RegisterAnonymousUser(ctx context.Context) (*User, []*Account, error) {
+	newUserID := uuid.New()
+	now := time.Now()
+
+	user := &User{
+		ID:           newUserID,
+		Email:        fmt.Sprintf("anonymous_%s@test.com", newUserID.String()[:8]),
+		PasswordHash: "N/A",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	currencies := []struct {
+		code   string
+		amount decimal.Decimal
+	}{
+		{"USD", decimal.NewFromInt(100000)},
+		{"BTC", decimal.NewFromInt(10)},
+		{"ETH", decimal.NewFromInt(100)},
+	}
+
+	var accounts []*Account
+
+	err := s.txManager.ExecTx(ctx, func(ctx context.Context) error {
+		// 1. 建立 User
+		if err := s.userRepo.CreateUser(ctx, user); err != nil {
+			return fmt.Errorf("建立用戶失敗: %w", err)
+		}
+
+		// 2. 建立多個幣種的 Account 並給予初始資金
+		for _, c := range currencies {
+			acc := &Account{
+				ID:        uuid.New(),
+				UserID:    newUserID,
+				Currency:  c.code,
+				Balance:   c.amount,
+				Locked:    decimal.Zero,
+				CreatedAt: now,
+				UpdatedAt: now,
+			}
+			if err := s.accountRepo.CreateAccount(ctx, acc); err != nil {
+				return fmt.Errorf("建立帳戶 %s 失敗: %w", c.code, err)
+			}
+			accounts = append(accounts, acc)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return user, accounts, nil
+}
+
+func (s *ExchangeServiceImpl) GetBalances(ctx context.Context, userID uuid.UUID) ([]*Account, error) {
+	return s.accountRepo.GetAccountsByUser(ctx, userID)
+}
+
+func (s *ExchangeServiceImpl) GetKLines(ctx context.Context, symbol string, interval string, limit int) ([]*KLine, error) {
+	// 0. 規格化
+	symbol = strings.ToUpper(symbol)
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	return s.tradeRepo.GetKLines(ctx, symbol, interval, limit)
+}
+
+func (s *ExchangeServiceImpl) GetRecentTrades(ctx context.Context, symbol string, limit int) ([]*matching.Trade, error) {
+	symbol = strings.ToUpper(symbol)
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	return s.tradeRepo.GetRecentTrades(ctx, symbol, limit)
+}
+
+// ClearSimulationData 清除交易資料
+func (s *ExchangeServiceImpl) ClearSimulationData(ctx context.Context) error {
+	return s.txManager.ExecTx(ctx, func(ctx context.Context) error {
+		if err := s.tradeRepo.DeleteAllTrades(ctx); err != nil {
+			return fmt.Errorf("清除成交資料失敗: %w", err)
+		}
+		if err := s.orderRepo.DeleteAllOrders(ctx); err != nil {
+			return fmt.Errorf("清除訂單資料失敗: %w", err)
+		}
+		log.Println("✅ 已清除交易資料")
+		return nil
+	})
 }
