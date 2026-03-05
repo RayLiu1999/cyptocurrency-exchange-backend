@@ -35,9 +35,9 @@ type WebSocketHandler struct {
 func NewWebSocketHandler() *WebSocketHandler {
 	return &WebSocketHandler{
 		clients:    make(map[*websocket.Conn]bool),
-		broadcast:  make(chan []byte),
-		register:   make(chan *websocket.Conn),
-		unregister: make(chan *websocket.Conn),
+		broadcast:  make(chan []byte, 100),   // 增加緩衝區
+		register:   make(chan *websocket.Conn, 10), // 增加緩衝區
+		unregister: make(chan *websocket.Conn, 10), // 增加緩衝區
 	}
 }
 
@@ -105,8 +105,14 @@ func (h *WebSocketHandler) Run() {
 }
 
 // Broadcast 發送訊息給所有客戶端
+// 使用 non-blocking send：若 channel 已滿則丟棄，避免阻塞呼叫方（尤其是 DB transaction 中的 OnTrade）
 func (h *WebSocketHandler) Broadcast(message []byte) {
-	h.broadcast <- message
+	select {
+	case h.broadcast <- message:
+	default:
+		// channel 已滿，丟棄此訊息（WebSocket 推播不影響核心撮合邏輯）
+		log.Println("WS Broadcast: channel full, dropping message")
+	}
 }
 
 var upgrader = websocket.Upgrader{

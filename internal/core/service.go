@@ -84,16 +84,22 @@ func (s *ExchangeServiceImpl) PlaceOrder(ctx context.Context, order *Order) erro
 		return err
 	}
 
-	// 4. 撮合 - 根據交易對獲取對應引擎
+	// 5. 撮合 - 根據交易對獲取對應引擎
 	matchOrder := s.convertToMatchingOrder(order)
 	engine := s.engineManager.GetEngine(order.Symbol)
 	trades := engine.Process(matchOrder)
 
-	// 5. 處理成交結果
+	// 5. 處理成交結果 (使用事務確保原子性)
 	for _, trade := range trades {
-		if err := s.ProcessTrade(ctx, trade, order); err != nil {
-			log.Printf("處理成交失敗: %v", err)
-			// TODO: 實作補償機制
+		err := s.txManager.ExecTx(ctx, func(ctx context.Context) error {
+			if err := s.ProcessTrade(ctx, trade, order); err != nil {
+				return fmt.Errorf("處理成交失敗: %w", err)
+			}
+			return nil
+		})
+		if err != nil {
+			log.Printf("成交處理失敗: %v", err)
+			// TODO: 實作補償機制或標記訂單異常
 		}
 	}
 
@@ -307,6 +313,17 @@ func (s *ExchangeServiceImpl) CancelOrder(ctx context.Context, orderID, userID u
 		if err := s.orderRepo.UpdateOrder(ctx, order); err != nil {
 			return fmt.Errorf("更新訂單狀態失敗: %w", err)
 		}
+
+		// 7. 通知撮合引擎移除訂單 (重要：保持記憶體與資料庫一致)
+		engine := s.engineManager.GetEngine(order.Symbol)
+		var matchSide matching.OrderSide
+		if order.Side == SideBuy {
+			matchSide = matching.SideBuy
+		} else {
+			matchSide = matching.SideSell
+		}
+		engine.Cancel(order.ID, matchSide)
+
 		return nil
 	})
 

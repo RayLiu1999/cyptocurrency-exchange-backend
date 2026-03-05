@@ -3,9 +3,10 @@
 # 變數定義
 APP_NAME=exchange-server
 BUILD_DIR=.
+DB_HOST=localhost
 DB_NAME=exchange
 DB_USER=postgres
-DB_PASSWORD=postgres
+DB_PASSWORD=123qwe
 DB_PORT=5432
 
 help: ## 顯示所有可用指令
@@ -19,7 +20,7 @@ build: ## 編譯專案
 
 run: ## 啟動伺服器 (需先啟動資料庫)
 	@echo "🚀 啟動伺服器..."
-	DATABASE_URL="postgres://$(DB_USER):$(DB_PASSWORD)@localhost:$(DB_PORT)/$(DB_NAME)?sslmode=disable" \
+	DATABASE_URL="postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable" \
 	go run cmd/server/main.go
 
 test: ## 執行測試
@@ -45,12 +46,12 @@ db-down: ## 停止資料庫
 
 db-migrate: ## 執行資料庫 Migration
 	@echo "📊 執行 Migration..."
-	docker exec -i exchange-postgres psql -U $(DB_USER) -d $(DB_NAME) < sql/schema.sql
+	docker exec -i postgres psql -U $(DB_USER) -d $(DB_NAME) < sql/schema.sql
 	@echo "✅ Migration 完成"
 
 db-seed: ## 插入測試資料
 	@echo "🌱 插入測試資料..."
-	docker exec -i exchange-postgres psql -U $(DB_USER) -d $(DB_NAME) < sql/seed.sql
+	docker exec -i postgres psql -U $(DB_USER) -d $(DB_NAME) < sql/seed.sql
 	@echo "✅ 測試資料插入完成"
 
 db-reset: db-down ## 重置資料庫（刪除並重建）

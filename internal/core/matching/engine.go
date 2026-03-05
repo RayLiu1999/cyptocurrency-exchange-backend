@@ -154,6 +154,13 @@ func (e *Engine) matchSellOrder(sellOrder *Order) []*Trade {
 	return trades
 }
 
+// Cancel 處理取消訂單，從訂單簿移除
+func (e *Engine) Cancel(orderID uuid.UUID, side OrderSide) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.orderBook.RemoveOrder(orderID, side)
+}
+
 // GetOrderBookSnapshot 取得訂單簿快照 (Thread-Safe)
 // depth: 每個方向返回的深度層級數量 (0 表示返回全部)
 func (e *Engine) GetOrderBookSnapshot(depth int) *OrderBookSnapshot {

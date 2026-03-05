@@ -118,7 +118,10 @@ make test-coverage
 - **Phase 3: 分散式架構優化**
   - 引入 Kafka 進行異步撮合與結算
   - 實作 CQRS
-- **Phase 4: Kubernetes 部署**
+  - 詳細架構升級請參考 [大流量處理改善方案](docs/HIGH_THROUGHPUT_IMPROVEMENT_PLAN.md)
+- **Phase 4: Kubernetes 部署與高可用性**
   - 部署至 AWS EKS
+  - 實作防禦性編程 (冪等性、限流、熔斷)
+  - 詳細可靠性計畫請參考 [高可用性與高可靠性改善方案](docs/HIGH_AVAILABILITY_IMPROVEMENT_PLAN.md)
 
 詳細規劃請參考 [專案規劃書](docs/PROJECT_PLAN.md)。

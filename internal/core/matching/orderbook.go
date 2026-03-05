@@ -1,6 +1,10 @@
 package matching
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/google/uuid"
+)
 
 // OrderBook 訂單簿，儲存買賣訂單
 type OrderBook struct {
@@ -69,6 +73,7 @@ func (ob *OrderBook) BestAsk() *Order {
 // RemoveBestBid 移除最佳買單
 func (ob *OrderBook) RemoveBestBid() {
 	if len(ob.bids) > 0 {
+		ob.bids[0] = nil // 避免記憶體洩漏
 		ob.bids = ob.bids[1:]
 	}
 }
@@ -76,6 +81,28 @@ func (ob *OrderBook) RemoveBestBid() {
 // RemoveBestAsk 移除最佳賣單
 func (ob *OrderBook) RemoveBestAsk() {
 	if len(ob.asks) > 0 {
+		ob.asks[0] = nil // 避免記憶體洩漏
 		ob.asks = ob.asks[1:]
+	}
+}
+
+// RemoveOrder 從訂單簿移除特定 ID 的訂單 (用於取消訂單)
+func (ob *OrderBook) RemoveOrder(orderID uuid.UUID, side OrderSide) {
+	if side == SideBuy {
+		for i, o := range ob.bids {
+			if o.ID == orderID {
+				ob.bids[i] = nil
+				ob.bids = append(ob.bids[:i], ob.bids[i+1:]...)
+				return
+			}
+		}
+	} else {
+		for i, o := range ob.asks {
+			if o.ID == orderID {
+				ob.asks[i] = nil
+				ob.asks = append(ob.asks[:i], ob.asks[i+1:]...)
+				return
+			}
+		}
 	}
 }
