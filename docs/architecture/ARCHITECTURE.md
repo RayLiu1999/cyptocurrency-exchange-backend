@@ -1,51 +1,46 @@
-# 專案架構說明
+# 專案架構概覽 (Architecture Overview)
 
-## 目錄結構與用途
+## 1. 系統演進階段 (Evolutionary Phases)
+目前專案正處於從 **Phase 2 (單體轉化)** 到 **Phase 3/4 (微服務與高可用部署)** 的關鍵過渡期。
 
-```
-exchange/
-├── .github/                    # GitHub 相關設定
-│   └── copilot-instructions.md # Copilot 指令規範
-├── api/                        # (預留) API 定義檔案，如 Protobuf, OpenAPI spec
-├── cmd/                        # 應用程式入口點 (Entry Points)
-│   ├── server/                 # 主要的 HTTP Server (Phase 1 單體架構使用)
-│   │   └── main.go            # 啟動伺服器
-│   ├── gateway/                # (預留 Phase 2) API Gateway
-│   ├── matching-engine/        # (預留 Phase 2) 撮合引擎微服務
-│   └── order-service/          # (預留 Phase 2) 訂單服務微服務
-├── internal/                   # 私有應用程式碼 (不可被外部 import)
-│   ├── core/                   # 核心業務邏輯層 (Domain Layer)
-│   │   ├── domain.go          # 領域模型 (Order, Account, User 等)
-│   │   ├── ports.go           # 介面定義 (Repository, Service interfaces)
-│   │   └── service.go         # 業務邏輯實作 (下單、撮合等)
-│   ├── repository/             # 資料存取層 (Persistence Layer)
-│   │   └── postgres.go        # PostgreSQL 實作
-│   ├── api/                    # HTTP API 層 (Presentation Layer)
-│   │   └── handlers.go        # Gin HTTP Handlers
-│   └── infrastructure/         # (預留) 基礎設施層 (Kafka, Redis 等)
-├── sql/                        # 資料庫相關檔案
-│   └── schema.sql             # 資料庫 Schema 定義
-├── deploy/                     # (預留) 部署相關檔案 (Kubernetes manifests, Helm charts)
-├── terraform/                  # (預留) AWS 基礎設施即程式碼 (IaC)
-├── docs/                       # 專案文件
-│   └── PROJECT_PLAN.md        # 專案規劃書
-├── go.mod                      # Go Module 定義
-├── go.sum                      # Go 依賴鎖定檔
-└── README.md                   # 專案說明
+### 當前狀態：混合微服務架構 (Hybrid Microservices)
+為了方便本地開發與雲端壓測，系統目前採用「單一代碼庫、多個進入點」的模型：
+- **Monolith Server** (`cmd/server`): 整合所有功能的單體服務，用於快速迭代。
+- **Matching Engine** (`cmd/matching-engine`): 獨立的撮合服務核心（開發中）。
+- **Simulator** (`cmd/simulator`): 高壓測試模擬器，模擬真實交易行為。
+- **Gateway** (`cmd/gateway`): 統一入口與認證中心 (規劃中)。
 
+---
+
+## 2. 目錄結構 (Workspace Structure)
+```text
+backend/
+├── cmd/                # 各服務進入點
+│   ├── server/         # 單體 API 服務 (現行主體)
+│   ├── matching-engine/# 獨立撮合引擎服務
+│   ├── simulator/      # 壓測模擬器
+│   └── gateway/        # API 網關 (規劃中)
+├── internal/           # 核心業務邏輯
+│   ├── api/            # HTTP/WS 處理器
+│   ├── core/           # 領域邏輯 (OrderBook, Matching Logic)
+│   ├── infrastructure/ # 外部資源 (Kafka, Redis, Logger)
+│   ├── exchange/       # CCXT 適配層 (多交易所接入)
+│   └── repository/     # 資料庫存取 (PostgreSQL)
+├── sql/                # 資料庫 Schema 與種子數據
+├── backups/infra/      # Terraform (ECS, RDS, ALB) 配置
+└── docs/               # 分類技術文件 (Architecture, Planning, Guides)
 ```
 
-## 架構模式：分層架構 + 六角架構 (Layered + Hexagonal/Ports & Adapters)
+---
 
-### 目前採用的架構模式
-
+## 3. 核心設計模式：六角架構 (Hexagonal Architecture)
 本專案採用 **分層架構 (Layered Architecture)** 結合 **六角架構 (Hexagonal Architecture / Ports & Adapters)** 的設計理念：
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     Presentation Layer                      │
 │                    (internal/api/)                          │
-│  - HTTP Handlers (Gin)                                      │
+│  - HTTP Handlers (Gin) / WebSocket Handlers                │
 │  - Request/Response 轉換                                     │
 └────────────────┬────────────────────────────────────────────┘
                  │ 呼叫
@@ -63,9 +58,16 @@ exchange/
 │                   Infrastructure Layer                      │
 │              (internal/repository/, infrastructure/)        │
 │  - PostgreSQL Repository (postgres.go)                      │
-│  - (未來) Redis, Kafka Adapters                             │
+│  - (未來) Redis, Kafka Adapters, CCXT Adapters              │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 4. 部署架構 (AWS ECS Pipeline)
+- **Containerization**: 所有服務均提供 Dockerfile。
+- **Orchestration**: 使用 AWS ECS Fargate 實現無伺服器容器化橫向擴展。
+- **Traffic Control**: 透過 ALB 將流量導向對應的 Task。
 
 ### 各層職責說明
 

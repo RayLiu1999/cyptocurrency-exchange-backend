@@ -1,15 +1,15 @@
-# 幣安 API 整合與策略回測平台計劃書
+# 多交易所策略回測與模擬交易平台計劃書 (CCXT 架構)
 
 ## 1. 概述
 
-本計劃旨在將現有高效能交易所系統擴展為**策略回測與模擬交易平台**，集成幣安（Binance）即時行情與歷史數據，支援多種交易策略的驗證與優化，最終提供類似 TradingView Pine Script 的體驗。
+本計劃旨在將現有高效能交易所系統擴展為**多交易所策略回測與模擬交易平台**。透過整合 CCXT (CryptoCurrency eXchange Trading Library) 抽象層，支援全球 100+ 交易所（如 Binance, OKX, Bybit 等）的即時行情與歷史數據，並提供統一的策略驗證與績效分析環境。
 
 ### 核心目標
-- 🔗 集成幣安 REST & WebSocket API
-- 📊 支援歷史行情回放與回測
-- 🤖 提供策略引擎與執行框架
-- 📈 計算績效指標與風險分析
-- 🎛️ 前端可視化配置與管理
+- 🔗 **多交易所集成**：透過 CCXT 建立統一的 REST API 與 WebSocket 數據接入
+- 📊 **高精度回測**：支援歷史 K 線回放，並結合自研撮合引擎進行成交模擬
+- 🤖 **抽象策略框架**：編寫一次策略，即可在不同交易所進行回測或模擬交易
+- 📈 **量化績效分析**：計算夏普比率、最大回撤等專業金融指標
+- 🎛️ **與微服務整合**：作為獨立服務運行，與 Order 及 Matching 服務解耦
 
 ---
 
@@ -20,45 +20,37 @@
 ```
 ┌─────────────────────────────────────┐
 │      Frontend (React/Vue)           │
-│  - 策略編輯器/可視化配置            │
-│  - 回測報告儀表板                   │
-│  - 即時模擬交易監控                 │
+│  - 策略編輯器 / 回測報告儀表板      │
+│  - 即時多交易所資產監控             │
 └────────────┬────────────────────────┘
              │
 ┌────────────▼────────────────────────┐
-│      API Layer (Gin)                │
-│  - /strategy/*  (策略管理)          │
-│  - /backtest/*  (回測執行)          │
-│  - /simulation/* (即時模擬)         │
-│  - /binance/*   (幣安數據同步)      │
+│      API Gateway (Gin)              │
+│  - /strategy/* /backtest/*          │
+│  - /exchange/* (多交易所數據查詢)   │
 └────────────┬────────────────────────┘
              │
 ┌────────────▼────────────────────────┐
 │      Service Layer                  │
 │  ┌──────────────────────────────┐   │
-│  │ Internal Event Bus           │   │
-│  │ - 解耦行情與策略信號         │   │
+│  │ Strategy Executor            │   │
+│  │ - 策略邏輯執行、訊號生成     │   │
 │  └────────────┬─────────────────┘   │
 │               │                     │
 │  ┌────────────▼─────────────────┐   │
-│  │ Strategy Engine              │   │
-│  │ - 策略執行與信號生成         │   │
-│  └──────────────────────────────┘   │
-│  ┌──────────────────────────────┐   │
 │  │ Backtest Engine              │   │
-│  │ - 歷史回放、撮合模擬(含滑點) │   │
+│  │ - 歷史數據驅動、撮合模擬     │   │
 │  └──────────────────────────────┘   │
 │  ┌──────────────────────────────┐   │
-│  │ Binance Provider/Sync        │   │
-│  │ - 數據獲取、限流與缺口修補   │   │
+│  │ Exchange Adapter (CCXT Hub)  │   │
+│  │ - 統一各交易所 API、限流管理 │   │
 │  └──────────────────────────────┘   │
 └────────────┬────────────────────────┘
              │
 ┌────────────▼────────────────────────┐
 │      Data Layer                     │
-│  - PostgreSQL (交易、K線、用戶)    │
-│  - Redis Cache (即時行情)           │
-│  - 本地持久化 (回測結果)            │
+│  - TimescaleDB (K線、交易數據)     │
+│  - Redis (即時價格、API Key 加密)   │
 └─────────────────────────────────────┘
 ```
 
@@ -66,182 +58,66 @@
 
 | 模組 | 位置 | 職責 |
 |------|------|------|
-| Binance Client | `internal/binance/client.go` | REST API 調用、認證 |
-| Binance WebSocket | `internal/binance/websocket.go` | 行情推送、訂單狀態 |
-| Strategy Engine | `internal/strategy/engine.go` | 策略執行、信號生成 |
-| Backtest Engine | `internal/backtest/engine.go` | 歷史回放、績效計算 |
-| Data Sync | `internal/binance/sync.go` | 定時數據同步 |
-| Portfolio Manager | `internal/portfolio/manager.go` | 持倉、風控管理 |
+| Exchange Adapter | `internal/exchange/adapter.go` | 定義標準介面，封裝 CCXT 調用 |
+| Market Sync Service | `internal/exchange/sync.go` | 多交易所 K 線定時同步與缺口修補 |
+| Strategy Engine | `internal/strategy/engine.go` | 策略生命週期管理 |
+| Backtest Engine | `internal/backtest/engine.go` | 歷史數據回放與指標計算 |
 
 ---
 
 ## 3. 實現階段
 
-### 階段 1：幣安數據集成（第 1-2 週）
+### 階段 1：多交易所數據適配（第 1-2 週）
 
-#### 1.1 Binance REST API 客戶端
-**檔案：** `internal/binance/client.go`
-
-```go
-type BinanceClient struct {
-    apiKey    string
-    apiSecret string
-    baseURL   string
-    client    *http.Client
-}
-
-// 方法清單
-- GetKlines(symbol string, interval string, limit int) ([]*KLine, error)
-- GetOrderBook(symbol string, limit int) (*OrderBook, error)
-- GetRecentTrades(symbol string, limit int) ([]*Trade, error)
-- GetExchangeInfo() (*ExchangeInfo, error)
-
-// 關鍵設計：權重限流器
-- 基於令牌桶 (Token Bucket) 演算法
-- 支援 X-MBX-USED-WEIGHT-1M 動態調整
-- 分布式擴展：支援 Redis 計數器
-```
-
-**支援交易對：** BTC, ETH, SOL, ADA, DOGE 等（配置化）
-
-**API 端點：**
-- `GET /api/v3/klines` - K 線數據
-- `GET /api/v3/depth` - 訂單簿
-- `GET /api/v3/trades` - 近期成交
-- `GET /api/v3/exchangeInfo` - 交易所信息
-
-#### 1.2 WebSocket 實時行情推送
-**檔案：** `internal/binance/websocket.go`
+#### 1.1 Exchange Adapter (CCXT Inspired)
+**檔案：** `internal/exchange/interface.go`
 
 ```go
-type WebSocketHandler struct {
-    conn      *websocket.Conn
-    listeners map[string][]func(*StreamMessage)
+// 統一交易所介面
+type ExchangeProvider interface {
+    GetId() string
+    FetchKlines(symbol string, interval string, since int64) ([]*KLine, error)
+    FetchOrderBook(symbol string) (*OrderBook, error)
+    FetchBalance() (*Balance, error)
+    // 即時數據由各交易所 Native WS 處理或 CCXT Pro
 }
-
-// 訂閱流
-- kline@1m  (1 分鐘 K 線)
-- kline@1h  (1 小時 K 線)
-- trade     (實時成交)
-- depth20   (訂單簿快照)
-- aggregateTrade (合併成交)
 ```
 
-**特性：**
-- 自動重連機制
-- 消息隊列緩衝
-- 事件驅動架構
+#### 1.2 數據同步服務
+*   **多路同步**：同時支持 Binance_USDT, OKX_USDT 等多個交易所的同步任務。
+*   **標準化儲存**：不論來源為何，統一存入 `market_data_klines` 表。
 
-#### 1.3 數據同步服務
-**檔案：** `internal/binance/sync.go`
-
-```go
-type SyncService struct {
-    client    *BinanceClient
-    db        *pgxpool.Pool
-    ticker    *time.Ticker
-}
-
-// 同步任務
-- SyncKlines(symbol, interval) - 定時同步 K 線
-- SyncTrades(symbol)          - 同步交易歷史
-- SyncOrderBook(symbol)       - 快照持久化
-
-// 進階機制
-- 缺口檢測 (Gap Detection)：自動掃描並補齊斷線期間的 K 線數據
-- 延遲過濾：剔除延遲超過 1000ms 的過時數據
-```
-
-**儲存策略：**
-- 每個交易對每個時間週期單獨表
-- 增量同步（記錄上次同步時間）
-- 自動清理過期數據（保留 1 年）
-
-#### 1.4 資料庫擴展
-**新增表結構：**
-
+#### 1.3 資料庫結構更新
 ```sql
--- 幣安 K 線數據
-CREATE TABLE binance_klines (
-    id SERIAL PRIMARY KEY,
-    symbol VARCHAR(20),
-    interval VARCHAR(10),  -- 1m, 5m, 1h, 4h, 1d
-    open_time TIMESTAMP,
-    open DECIMAL(20, 8),
-    high DECIMAL(20, 8),
-    low DECIMAL(20, 8),
-    close DECIMAL(20, 8),
-    volume DECIMAL(20, 2),
-    quote_volume DECIMAL(20, 8),
-    trades INT,
-    taker_buy_volume DECIMAL(20, 2),
-    synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(symbol, interval, open_time)
+-- 標準化 K 線表
+CREATE TABLE market_data_klines (
+    time TIMESTAMP NOT NULL,
+    exchange_id VARCHAR(50),
+    symbol VARCHAR(50),
+    interval VARCHAR(10),
+    open DECIMAL, high DECIMAL, low DECIMAL, close DECIMAL,
+    volume DECIMAL
 );
-
--- 幣安實時成交
-CREATE TABLE binance_trades (
-    id BIGINT PRIMARY KEY,
-    symbol VARCHAR(20),
-    price DECIMAL(20, 8),
-    quantity DECIMAL(20, 8),
-    trade_time TIMESTAMP,
-    is_buyer_maker BOOLEAN
-);
-
--- 訂單簿快照
-CREATE TABLE orderbook_snapshots (
-    id UUID PRIMARY KEY,
-    symbol VARCHAR(20),
-    timestamp TIMESTAMP,
-    bids JSONB,
-    asks JSONB
-);
-
--- 索引
-CREATE INDEX idx_binance_klines_symbol_interval ON binance_klines(symbol, interval, open_time DESC);
-CREATE INDEX idx_binance_trades_symbol_time ON binance_trades(symbol, trade_time DESC);
+-- 轉換為時序表 (TimescaleDB)
+SELECT create_hypertable('market_data_klines', 'time');
 ```
 
 ---
 
-### 階段 2：策略引擎（第 3-4 週）
+### 階段 2：通用策略引擎（第 3-4 週）
 
-#### 2.1 策略介面定義
-**檔案：** `internal/strategy/interface.go`
-
+#### 2.1 策略邏輯抽象
+策略不再與「幣安」綁定，而是透過傳入 `ExchangeID` 來切換：
 ```go
-// Strategy 定義所有策略必須實現的介面
-type Strategy interface {
-    // 初始化
-    Initialize(ctx context.Context, config StrategyConfig) error
-    
-    // 事件回調
-    OnKLine(kline *KLine) error
-    OnTrade(trade *Trade) error
-    OnOrderBook(snapshot *OrderBook) error
-    OnPortfolioUpdate(portfolio *Portfolio) error
-    
-    // 清理
-    Close() error
-}
-
-type StrategyConfig struct {
-    Name          string                 `json:"name"`
-    Description   string                 `json:"description"`
-    Parameters    map[string]interface{} `json:"parameters"`
-    RiskLimits    RiskLimits             `json:"risk_limits"`
-    Symbols       []string               `json:"symbols"`
-}
-
-// 交易指令
-type Order struct {
-    Symbol    string
-    Side      string          // BUY, SELL
-    Type      string          // LIMIT, MARKET
-    Quantity  decimal.Decimal
-    Price     decimal.Decimal
-    TimeInForce string         // GTC, IOC, FOK
+func (s *MAChrossStrategy) OnKLine(kline *KLine) {
+    // 邏輯保持一致，透過 context 獲得當前交易所資訊
+    if s.isGoldenCross() {
+        s.executor.PlaceOrder(OrderRequest{
+            Exchange: kline.ExchangeID,
+            Symbol: kline.Symbol,
+            Side: "BUY",
+        })
+    }
 }
 ```
 
@@ -357,6 +233,7 @@ func (e *Executor) Run(ctx context.Context) error {
 ```go
 type BacktestEngine struct {
     strategy       Strategy
+    exchange       string    // 新增：目標交易所
     startTime      time.Time
     endTime        time.Time
     initialCapital decimal.Decimal
@@ -407,7 +284,7 @@ type Matcher struct {
 // 1. 限價單：檢查訂單簿，匹配對方向掛單
 // 2. 市價單：立即用最優價成交，數量不足則部分成交
 // 3. 滑點模擬 (Slippage)：加入固定比例或基於 ATR 的動態滑點
-// 4. 手續費扣除：支援 0.1% 標準費率或使用虛擬 BNB 抵扣模擬
+// 4. 手續費扣除：支援各交易所標準費率 (由 CCXT 提供參考值)
 // 5. 流動性限制：大額訂單對價格的衝擊 (Market Impact) 模擬
 ```
 
@@ -457,12 +334,12 @@ GET    /api/v1/portfolio/history          - 淨值曲線
 WS     /ws/portfolio                      - 實時推送
 ```
 
-##### 幣安數據
+##### 多交易所數據
 ```
-GET    /api/v1/binance/klines/:symbol     - K 線查詢
-GET    /api/v1/binance/orderbook/:symbol  - 訂單簿
-GET    /api/v1/binance/trades/:symbol     - 成交記錄
-GET    /api/v1/binance/sync/status        - 同步狀態
+GET    /api/v1/exchange/:id/klines/:symbol     - K 線查詢
+GET    /api/v1/exchange/:id/orderbook/:symbol  - 訂單簿
+GET    /api/v1/exchange/:id/trades/:symbol     - 成交記錄
+GET    /api/v1/exchange/sync/status             - 同步狀態
 ```
 
 #### 4.2 前端組件規劃
@@ -472,7 +349,7 @@ GET    /api/v1/binance/sync/status        - 同步狀態
 | Strategy Editor | 可視化/JSON 編輯策略參數 | 策略配置 |
 | Backtest Center | 歷史數據回放、盈虧曲線、回撤分析 | 策略中心 (靜態/批次) |
 | Paper Trading | 實時行情、持倉線、模擬掛單 | 交易看板 (動態/實時) |
-| Portfolio Monitor | 多幣種資產比例、風險指標 | 風控看板 |
+| Portfolio Monitor | 多交易所資產比例、風險指標 | 風控看板 |
 
 ---
 
@@ -482,10 +359,10 @@ GET    /api/v1/binance/sync/status        - 同步狀態
 | 組件 | 技術 | 理由 |
 |------|------|------|
 | 框架 | Gin | 高效能 HTTP 框架 |
-| 數據庫 | PostgreSQL | 關聯數據、複雜查詢 |
+| 數據庫 | TimescaleDB | 時序數據、複雜查詢 |
 | 快取 | Redis | 實時行情快取 |
-| 時序數據 | TimescaleDB | K 線高效存儲（可選） |
-| 佇列 | RabbitMQ | 異步任務、數據同步 |
+| 多交易所介面 | CCXT (Go Wrapper) | 快速適配多家交易所 |
+| 佇列 | NATS JetStream | 低延遲、異步任務 |
 | 監控 | Prometheus | 性能指標收集 |
 
 ### 前端
@@ -501,14 +378,12 @@ GET    /api/v1/binance/sync/status        - 同步狀態
 
 ## 5. 實現細節
 
-### 5.1 幣安 API 認證
+### 5.1 交易所 API 安全管理
 ```go
-// HMAC-SHA256 簽名
-func (c *BinanceClient) sign(params map[string]string) string {
-    queryString := c.encodeParams(params)
-    hash := hmac.New(sha256.New, []byte(c.apiSecret))
-    hash.Write([]byte(queryString))
-    return hex.EncodeToString(hash.Sum(nil))
+// 加密儲存 API Keys
+func (m *ExchangeManager) SaveKeys(exchangeID, apiKey, secret string) error {
+    encryptedSecret := m.crypto.Encrypt(secret)
+    return m.db.Save(exchangeID, apiKey, encryptedSecret)
 }
 ```
 
@@ -539,19 +414,94 @@ type RiskManager struct {
 ## 6. 性能優化
 
 ### 6.1 數據庫優化
-- K 線表按日期分區
-- 主鍵索引（symbol, interval, open_time）
-- 結合 TimescaleDB 進行時序數據優化
+- 使用 TimescaleDB Hypertable
+- 資料保留策略 (Retention Policy)
+- 持久化與緩存分離
 
 ### 6.2 快取策略
-- Redis 快取最近 100 根 K 線
-- 訂單簿快照 TTL 5 分鐘
-- 成交記錄 LRU 快取
+- Redis 快取最近 500 根 K 線 (各交易所常用週期)
+- 高頻數據緩衝 (Buffer) 批次寫入 DB
 
 ### 6.4 安全實踐
 - **Secrets 管理**：禁止在代碼中硬編碼 API Key，使用 `.env` 或 AWS Secrets Manager。
-- **權限最小化**：API Key 僅開啟「讀取」與「現貨交易」，嚴禁開啟「提現」權限。
-- **IP 白名單**：在幣安後台綁定伺服器靜態 IP 以增強安全性。
+- **權限最小化**：API Key 僅開啟「讀取」與「現貨交易」。
+- **IP 白名單**：在交易所後台綁定伺服器靜態 IP。
+
+---
+
+## 7. 測試計劃
+
+### 7.1 單元測試
+- 策略信號生成邏輯
+- 績效指標計算
+- CCXT 適配層隔離測試
+
+### 7.2 集成測試
+- 交易所回傳模擬 (Mocking)
+- 回測引擎端到端
+- 事件總線 (Event Bus) 傳遞
+
+---
+
+## 8. 部署與監控
+
+### 8.1 Docker 容器化
+```dockerfile
+# Golang 服務
+FROM golang:1.21 AS builder
+WORKDIR /app
+COPY . .
+RUN go build -o trading-platform ./cmd/server
+
+FROM alpine:latest
+COPY --from=builder /app/trading-platform /usr/local/bin/
+CMD ["trading-platform"]
+```
+
+---
+
+## 9. 項目時程
+
+| 階段 | 時間 | 交付物 |
+|------|------|--------|
+| 1 | 第 1-2 週 | CCXT 適配層、數據同步服務 |
+| 2 | 第 3-4 週 | 策略引擎、3 個內建策略 |
+| 3 | 第 5-6 週 | 回測引擎、績效計算 |
+| 4 | 第 7-8 週 | API 層、前端原型 |
+
+---
+
+## 10. 風險與緩解方案
+
+| 風險 | 影響 | 緩解方案 |
+|------|------|---------|
+| 交易所 API 變更 | 數據同步中斷 | 定期監控 CCXT 更新、API 版本緩衝 |
+| 多交易所頻率不一 | 回測難對齊 | 使用內部標準時間戳進行數據插值處理 |
+| 性能瓶頸 | 回測耗時 | 多線程並行、增量快取 |
+
+---
+
+## 11. 進一步擴展
+
+### 11.1 第二階段（未來）
+- ✅ 支援期貨與槓桿交易
+- ✅ 機器學習信號優化
+- ✅ 實盤自動跟單系統
+
+---
+
+## 12. 成功指標
+
+- ✅ 支持 3+ 家主流交易所
+- ✅ 單次回測耗時 < 10 秒 (萬級數據)
+- ✅ 策略回測精準度差異 < 3%
+- ✅ 系統 24/7 自動同步數據
+
+---
+
+**文檔版本：** v2.0 (CCXT 基架)  
+**最後更新：** 2026-03-05  
+**維護者：** 開發團隊
 
 ---
 

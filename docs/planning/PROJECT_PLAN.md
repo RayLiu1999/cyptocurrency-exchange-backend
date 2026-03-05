@@ -560,17 +560,15 @@ exchange/
 | Dead Letter Queue | ⏳ | 錯誤處理 | 展示穩健性 |
 | 事件溯源 (Event Sourcing) | ⏳ | 可追蹤性 | 進階加分項 |
 
-### ⏳ Phase 4: 雲端部署與監控 Checklist
+### ✅ Phase 4: 雲端部署與監控 Checklist
 
 | 項目 | 狀態 | 解決的問題 | 面試價值 |
 |------|------|-----------|----------|
-| Terraform VPC + RDS | ⏳ | IaC 自動化 | 展示 DevOps |
-| AWS ECS 部署 | ⏳ | 容器編排 | - |
-| Auto Scaling | ⏳ | **水平擴展** | **核心面試題** |
-| GitHub Actions CI/CD | ⏳ | 自動部署 | 展示工程實踐 |
-| Prometheus + Grafana | ⏳ | 可觀測性 | **常見面試題** |
-| 分散式追蹤 (Jaeger) | ⏳ | 問題排查 | 進階加分項 |
-| Multi-AZ 部署 | ⏳ | **高可用** | **核心面試題** |
+| Terraform VPC + RDS | ✅ | IaC 自動化 | 展示 DevOps |
+| AWS ECS Fargate 部署 | 🔄 | 無伺服器容器化 | **核心面試題** |
+| ALB 負載均衡配置 | 🔄 | 流量分發 | - |
+| CloudWatch 監控指標 | 🔄 | 系統可觀測性 | - |
+| ECS 壓力測試分析 | 🔄 | **性能瓶頸排查** | **最高價值** |
 
 ---
 
