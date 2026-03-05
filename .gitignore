@@ -46,3 +46,7 @@ tmp/
 temp/
 
 chart/
+
+# temp
+/docs
+/backups

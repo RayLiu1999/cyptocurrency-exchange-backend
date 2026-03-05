@@ -1,0 +1,50 @@
+{
+  // 容器在側邊欄顯示的名稱
+  "name": "Go Exchange Backend",
+
+  // 使用微軟官方提供的 Go 開發映像檔，基於 Debian (Bookworm) 並預裝 Go 1.24
+  "image": "mcr.microsoft.com/devcontainers/go:1-1.24-bookworm",
+
+  // 👇 新增這一段：強制將 host.docker.internal 指向主機的 IPv4 閘道
+  "runArgs": ["--add-host=host.docker.internal:host-gateway"],
+
+  "customizations": {
+    "vscode": {
+      // 當容器啟動時，會自動幫你安裝這些常用的 VS Code 擴充功能
+      "extensions": [
+        "golang.Go", // Go 語言核心支援
+        "MS-CEINTL.vscode-language-pack-zh-hant", // 繁體中文包
+        "humao.rest-client", // 測試 HTTP API (代替 Postman)
+        "tht13.html-preview-vscode", // HTML 預覽
+        "mtxr.sqltools", // SQL 管理主控台
+        "mtxr.sqltools-driver-pg", // PostgreSQL 驅動
+        "tamasfe.even-better-toml", // TOML 檔案支援
+        "hashicorp.terraform", // Terraform 支援
+        "ms-azuretools.vscode-docker" // Docker 管理介面
+      ],
+      // 指定容器內的 VS Code 設定
+      "settings": {
+        "editor.formatOnSave": true, // 存檔自動格式化
+        "go.useLanguageServer": true, // 啟用 gopls 語法伺服器
+        "go.formatTool": "gofumpt", // 使用更嚴謹的 gofumpt 格式化工具
+        "go.lintTool": "golangci-lint", // 使用專業級的 golangci-lint
+        "go.lintOnSave": "package", // 存檔時檢查整個 package
+        "editor.codeActionsOnSave": {
+          "source.organizeImports": "explicit" // 存檔時自動移除沒用的 import
+        }
+      }
+    }
+  },
+
+  // 轉發連接埠：讓你在容器內跑的服務，可以透過本地 http://localhost:8080 存取
+  "forwardPorts": [
+    8080 // API Server
+  ],
+
+  // 容器「第一次」建立完畢後，會自動執行的指令
+  // 下載專案依賴庫，並安裝 lint 工具
+  "postCreateCommand": "go mod download && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest",
+
+  // 指定容器內的預設用戶
+  "remoteUser": "vscode"
+}
