@@ -4,6 +4,11 @@ import (
 	"context"
 	"os"
 
+	"net/http"
+	"os/signal"
+	"syscall"
+	"time"
+
 	"github.com/RayLiu1999/exchange/internal/api"
 	"github.com/RayLiu1999/exchange/internal/core"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
@@ -72,8 +77,32 @@ func main() {
 	url := ginSwagger.URL("http://localhost:8080/docs/swagger.yaml")
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, url))
 
-	logger.Info("🚀 伺服器啟動", zap.String("port", ":8080"))
-	if err := r.Run(":8080"); err != nil {
-		logger.Log.Fatal("伺服器啟動失敗", zap.Error(err))
+	// 6. 啟動伺服器 (Graceful Shutdown 實作)
+	srv := &http.Server{
+		Addr:    ":8080",
+		Handler: r,
 	}
+
+	go func() {
+		logger.Info("🚀 伺服器啟動", zap.String("port", ":8080"))
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("伺服器啟動失敗", zap.Error(err))
+		}
+	}()
+
+	// 等待中斷訊號
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	logger.Info("正在關閉伺服器...")
+
+	// 設定超時時間，等待當前請求處理完畢
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		logger.Error("伺服器強制關閉", zap.Error(err))
+	}
+
+	logger.Info("伺服器已優雅關閉")
 }
