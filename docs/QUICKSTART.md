@@ -16,6 +16,7 @@ make dev
 ```
 
 這個指令會：
+
 1. 啟動 PostgreSQL 和 Redis (Docker)
 2. 執行資料庫 Migration (建立 tables)
 3. 啟動 API Server (port 8080)
@@ -102,5 +103,6 @@ lsof -i :8080
 
 ## 下一步
 
-- 查看 [架構說明](docs/ARCHITECTURE.md)
-- 查看 [專案規劃](docs/PROJECT_PLAN.md)
+- 查看 [架構說明](ARCHITECTURE.md)
+- 查看 [ECS 部署與壓測手冊](ECS_LOADTEST_GUIDE.md)
+- 查看 [學習路線圖](../../project_target.md)
