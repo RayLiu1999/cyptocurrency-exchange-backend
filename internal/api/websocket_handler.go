@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/RayLiu1999/exchange/internal/core/matching"
@@ -23,21 +22,27 @@ const (
 	pingPeriod = (pongWait * 9) / 10
 )
 
+// Client 封裝 WebSocket 連線與其專屬的寫入緩衝區
+type Client struct {
+	handler *WebSocketHandler
+	conn    *websocket.Conn
+	send    chan []byte // 每個 Client 專屬的輸出通道
+}
+
 // WebSocketHandler 負責管理 WebSocket 連線與廣播
 type WebSocketHandler struct {
-	clients    map[*websocket.Conn]bool
+	clients    map[*Client]bool
 	broadcast  chan []byte
-	register   chan *websocket.Conn
-	unregister chan *websocket.Conn
-	mu         sync.Mutex
+	register   chan *Client
+	unregister chan *Client
 }
 
 func NewWebSocketHandler() *WebSocketHandler {
 	return &WebSocketHandler{
-		clients:    make(map[*websocket.Conn]bool),
-		broadcast:  make(chan []byte, 100),   // 增加緩衝區
-		register:   make(chan *websocket.Conn, 10), // 增加緩衝區
-		unregister: make(chan *websocket.Conn, 10), // 增加緩衝區
+		clients:    make(map[*Client]bool),
+		broadcast:  make(chan []byte, 256),
+		register:   make(chan *Client),
+		unregister: make(chan *Client),
 	}
 }
 
@@ -72,34 +77,31 @@ func (h *WebSocketHandler) OnTrade(trade *matching.Trade) {
 	h.Broadcast(jsonMsg)
 }
 
-// Run 啟動 WS 管理協程
+// Run 啟動 WS 管理協程 (CSP 模型)
 func (h *WebSocketHandler) Run() {
 	for {
 		select {
 		case client := <-h.register:
-			h.mu.Lock()
+			// 只有此 Goroutine 讀寫 map，不需 Lock
 			h.clients[client] = true
-			h.mu.Unlock()
 		case client := <-h.unregister:
-			h.mu.Lock()
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
-				client.Close()
+				close(client.send)
 			}
-			h.mu.Unlock()
 		case message := <-h.broadcast:
-			h.mu.Lock()
+			// 廣播不再直接呼叫網路 IO
 			for client := range h.clients {
-				// TODO: 每個 Client 應該要有自己的 Write Loop (避免 Head-of-Line Blocking)
-				client.SetWriteDeadline(time.Now().Add(writeWait))
-				err := client.WriteMessage(websocket.TextMessage, message)
-				if err != nil {
-					log.Printf("WS Write Error: %v", err)
-					client.Close()
+				select {
+				case client.send <- message:
+					// 成功放入連線專屬的 send channel
+				default:
+					// 如果該連線的 send channel 滿了 (可能網路極慢)，剔除該連線避免拖慢整個廣播
+					log.Println("WS Send Buffer Full: removing client")
+					close(client.send)
 					delete(h.clients, client)
 				}
 			}
-			h.mu.Unlock()
 		}
 	}
 }
@@ -129,49 +131,70 @@ func (h *WebSocketHandler) HandleWS(c *gin.Context) {
 		return
 	}
 
-	h.register <- conn
+	client := &Client{
+		handler: h,
+		conn:    conn,
+		send:    make(chan []byte, 256), // 每個 client 有自己的寫入 buffer
+	}
 
-	// 啟動 Ping/Pong 機制
-	go h.writePump(conn)
-	go h.readPump(conn)
+	h.register <- client
+
+	// 啟動實作者負責的讀寫 Loop (pump)
+	go client.writePump() // 現在由 Client 本身處理
+	go client.readPump()  // 現在由 Client 本身處理
 }
 
-// readPump 處理讀取與 Pong
-func (h *WebSocketHandler) readPump(conn *websocket.Conn) {
+// readPump 處理連線讀取
+func (c *Client) readPump() {
 	defer func() {
-		h.unregister <- conn
+		c.handler.unregister <- c
+		c.conn.Close()
 	}()
 
-	conn.SetReadLimit(512)
-	conn.SetReadDeadline(time.Now().Add(pongWait))
-	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.conn.SetReadLimit(512)
+	c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.conn.SetPongHandler(func(string) error {
+		c.conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
 
 	for {
-		_, _, err := conn.ReadMessage()
+		_, _, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("WS Error: %v", err)
+				log.Printf("WS Read Error: %v", err)
 			}
 			break
 		}
 	}
 }
 
-// writePump 處理 Pings (目前 Broadcast 還是走 Sync map，未來應移到這裡)
-func (h *WebSocketHandler) writePump(conn *websocket.Conn) {
+// writePump 將訊息寫入連線 (負責網路 I/O)
+func (c *Client) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
-		// conn.Close() 由 readPump 或 unregister 負責
 	}()
 
-	for range ticker.C {
-		conn.SetWriteDeadline(time.Now().Add(writeWait))
-		if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-			return
+	for {
+		select {
+		case message, ok := <-c.send:
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if !ok {
+				// 通道關閉時，發送 Close 訊息
+				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+
+			// 執行真正的網路寫入 (Blocking IO)
+			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				return
+			}
+		case <-ticker.C:
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
 		}
 	}
 }
