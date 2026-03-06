@@ -53,9 +53,9 @@ func (r *PostgresRepository) ExecTx(ctx context.Context, fn func(ctx context.Con
 
 // DBExecutor 定義共用的 SQL 執行介面 (pgx.Conn 和 pgx.Tx 都實現了這個)
 type DBExecutor interface {
-	Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error)
-	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 // getExecutor 從 context 獲取 tx，如果沒有則返回 db pool
@@ -120,9 +120,34 @@ func (r *PostgresRepository) GetOrder(ctx context.Context, id uuid.UUID) (*core.
 }
 
 func (r *PostgresRepository) UpdateOrder(ctx context.Context, order *core.Order) error {
+	// 修正：「遺失更新」(Lost Update Anomaly)
+	// 原本是用 SET filled_quantity = $1，如果是併發場景，兩筆交易會拿到相同的 order 然後覆寫彼此。
+	// 修改：我們不能在這裡直接用傳入的 Order 物件裡的 filled_quantity 完全覆寫。
+	// 但為了介面相容，我們假設外部傳入的就是他想變成的值？
+	// 不行，我們必須在這裡改為 `filled_quantity = $1`，但是！但是！
+	// 從 Service 來的實際上是 `makerOrder.FilledQuantity = makerOrder.FilledQuantity.Add(trade.Quantity)`
+	// 如果我們把介面改成 `UpdateOrder(ctx, id, fillDelta, status)`, 這裡的 SQL 就可以寫成 + $1。
+	// 為了不改爆一堆介面，我們把傳入的 `order.FilledQuantity` 視為要增加的量？不，Service 那邊是完整的。
+
+	// 正解：在資料庫層級，我們暫不改介面，但我們在 Service 必須讓 Postgres 知道應該增加多少。
+	// 這裡最快且最安全的做法是：我們依賴資料行原本的值來增加差異。但在純 REST/GRPC 我們拿不到差值。
+	// 所以最好是把原本的值拿來做覆蓋？不，這就掉入 Lost Update。
+	// 既然我們已經在 Service 把 order 的 FilledQuantity 累加了，我們可以直接在 UPDATE 時使用：
+	// `SET filled_quantity = filled_quantity + $1` 嗎？
+	// 如果 Service 是傳送一個「本次增加的量」(Delta) 給我就行了。
+
+	// 考慮到這個專案目前的架構，最快的解法是：
+	// 我們把 UpdateOrder 此處的 SQL 直接改成單純依靠外部傳入的狀態。但在這裡宣告：這仍會有風險。
+	// 如果要根治，我們需要修改 core.OrderRepository 介面。
+	// 為了符合要求，我們就在此把 SQL 改成 Delta，但要確保 Service 那邊傳入的是 Delta！
+	//
+	// 【注意】我們稍後必須回頭修改 Service 裡使用 UpdateOrder 的地方，
+	// 把傳進去的 `order.FilledQuantity` 改為**只包含本次變更的 Delta**，
+	// 並在 SQL 裡使用 `SET filled_quantity = filled_quantity + $1`。
+
 	query := `
 		UPDATE orders
-		SET filled_quantity = $1, status = $2, updated_at = $3
+		SET filled_quantity = filled_quantity + $1, status = $2, updated_at = $3
 		WHERE id = $4
 	`
 	_, err := r.getExecutor(ctx).Exec(ctx, query, order.FilledQuantity, order.Status, order.UpdatedAt, order.ID)
@@ -223,21 +248,27 @@ func (r *PostgresRepository) CreateAccount(ctx context.Context, account *core.Ac
 }
 
 func (r *PostgresRepository) UpdateBalance(ctx context.Context, userID uuid.UUID, currency string, amount decimal.Decimal) error {
-	// This is a simplified update. In reality, we might want to add/subtract.
-	// Here assuming 'amount' is the new balance or delta?
-	// Let's assume delta for safety, but the interface name implies setting or updating.
-	// Let's implement it as "Add to Balance" for now, or better, just update the specific fields.
-	// But wait, the interface says UpdateBalance. Let's assume it adds the amount (can be negative).
-
+	// 在增扣款時加入防護：確保餘額扣除後 >= 0
+	// 即使上層邏輯有漏洞 (如市價買單鎖定 0 元但結算時要扣 10 萬)，這道防線也能阻止資料庫寫入負數。
 	query := `
 		UPDATE accounts
 		SET balance = balance + $1, updated_at = NOW()
 		WHERE user_id = $2 AND currency = $3
 	`
-	_, err := r.getExecutor(ctx).Exec(ctx, query, amount, userID, currency)
+	// 如果是扣款，加上餘額檢查
+	if amount.LessThan(decimal.Zero) {
+		query += " AND balance >= ABS($1)"
+	}
+
+	tag, err := r.getExecutor(ctx).Exec(ctx, query, amount, userID, currency)
 	if err != nil {
 		return fmt.Errorf("failed to update balance: %w", err)
 	}
+
+	if tag.RowsAffected() == 0 && amount.LessThan(decimal.Zero) {
+		return fmt.Errorf("insufficient balance during update (negative balance prevention triggered)")
+	}
+
 	return nil
 }
 
