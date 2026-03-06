@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/RayLiu1999/exchange/internal/core"
 	"github.com/RayLiu1999/exchange/internal/core/matching"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -47,17 +48,14 @@ func NewWebSocketHandler() *WebSocketHandler {
 }
 
 // Ensure implementation
-// var _ core.TradeEventListener = (*WebSocketHandler)(nil)
-// (需解決 core import cycle，暫時透過 duck typing 或調整 package 結構，
-// 這裡簡單起見我們讓 `HandleWS` 和 `OnTrade` 在同一個 package 即可，
-// 但為了依賴反轉，main 裡會檢查 interface。)
+var _ core.TradeEventListener = (*WebSocketHandler)(nil)
 
 // OnTrade 實作 TradeEventListener 介面
 func (h *WebSocketHandler) OnTrade(trade *matching.Trade) {
 	// 轉換為 JSON 訊息
-	msg := map[string]interface{}{
+	msg := map[string]any{
 		"type": "trade",
-		"data": map[string]interface{}{
+		"data": map[string]any{
 			"id":             trade.ID,
 			"symbol":         trade.Symbol,
 			"price":          trade.Price,
@@ -65,6 +63,33 @@ func (h *WebSocketHandler) OnTrade(trade *matching.Trade) {
 			"maker_order_id": trade.MakerOrderID,
 			"taker_order_id": trade.TakerOrderID,
 			"timestamp":      time.Now(),
+		},
+	}
+
+	jsonMsg, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("JSON Marshal Error: %v", err)
+		return
+	}
+
+	h.Broadcast(jsonMsg)
+}
+
+// OnOrderUpdate 實作 TradeEventListener 介面
+func (h *WebSocketHandler) OnOrderUpdate(order *core.Order) {
+	msg := map[string]any{
+		"type": "order_update",
+		"data": map[string]any{
+			"id":              order.ID,
+			"user_id":         order.UserID,
+			"symbol":          order.Symbol,
+			"side":            order.Side,
+			"type":            order.Type,
+			"price":           order.Price,
+			"quantity":        order.Quantity,
+			"filled_quantity": order.FilledQuantity,
+			"status":          order.Status,
+			"updated_at":      order.UpdatedAt,
 		},
 	}
 
