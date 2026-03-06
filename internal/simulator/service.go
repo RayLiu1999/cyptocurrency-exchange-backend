@@ -171,76 +171,90 @@ func (s *Service) runSimulation(ctx context.Context, traders []Trader, cfg Confi
 		}
 	}()
 
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	orderCount := 0
+	var wg sync.WaitGroup
+	workerCount := cfg.WorkerCount
+	if workerCount <= 0 {
+		workerCount = 1
+	}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := rand.New(rand.NewSource(time.Now().UnixNano()))
 
-		if !cfg.Infinite && orderCount >= cfg.TotalTx {
-			return
-		}
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
 
-		trader := traders[r.Intn(len(traders))]
+				if !cfg.Infinite && atomic.LoadInt64(&s.sentTx) >= int64(cfg.TotalTx) {
+					// 為了保證其他 workers 也會提早退出，這裡也可以取消 ctx，但這會讓外面的 defer cancel 也提早觸發
+					// 這裡依賴大家一起判斷 sentTx
+					return
+				}
 
-		priceMu.Lock()
-		refPrice := currentPrice
-		priceMu.Unlock()
+				trader := traders[r.Intn(len(traders))]
 
-		side := core.SideBuy
-		if r.Intn(2) == 0 {
-			side = core.SideSell
-		}
+				priceMu.Lock()
+				refPrice := currentPrice
+				priceMu.Unlock()
 
-		orderType := core.TypeLimit
-		price := refPrice
+				side := core.SideBuy
+				if r.Intn(2) == 0 {
+					side = core.SideSell
+				}
 
-		if trader.Role == "TAKER" {
-			if r.Float64() < 0.8 {
-				orderType = core.TypeMarket
-				price = 0
-			} else {
-				if side == core.SideBuy {
-					price = refPrice * 1.02
+				orderType := core.TypeLimit
+				price := refPrice
+
+				if trader.Role == "TAKER" {
+					if r.Float64() < 0.8 {
+						orderType = core.TypeMarket
+						price = 0
+					} else {
+						if side == core.SideBuy {
+							price = refPrice * 1.02
+						} else {
+							price = refPrice * 0.98
+						}
+					}
 				} else {
-					price = refPrice * 0.98
+					spread := r.Float64() * 0.02 * refPrice
+					if side == core.SideBuy {
+						price = refPrice - spread
+					} else {
+						price = refPrice + spread
+					}
+				}
+
+				qty := decimal.NewFromFloat(0.1 + r.Float64())
+
+				order := &core.Order{
+					UserID:   trader.ID,
+					Symbol:   cfg.Symbol,
+					Side:     side,
+					Type:     orderType,
+					Price:    decimal.NewFromFloat(price),
+					Quantity: qty,
+				}
+
+				if err := s.svc.PlaceOrder(ctx, order); err != nil {
+					log.Printf("❌ 模擬下單失敗: %v", err)
+				} else {
+					atomic.AddInt64(&s.sentTx, 1)
+				}
+
+				if cfg.IntervalMs > 0 {
+					time.Sleep(time.Duration(cfg.IntervalMs) * time.Millisecond)
 				}
 			}
-		} else {
-			spread := r.Float64() * 0.02 * refPrice
-			if side == core.SideBuy {
-				price = refPrice - spread
-			} else {
-				price = refPrice + spread
-			}
-		}
-
-		qty := decimal.NewFromFloat(0.1 + r.Float64())
-
-		order := &core.Order{
-			UserID:   trader.ID,
-			Symbol:   cfg.Symbol,
-			Side:     side,
-			Type:     orderType,
-			Price:    decimal.NewFromFloat(price),
-			Quantity: qty,
-		}
-
-		if err := s.svc.PlaceOrder(ctx, order); err != nil {
-			log.Printf("❌ 模擬下單失敗: %v", err)
-		} else {
-			atomic.AddInt64(&s.sentTx, 1)
-			orderCount++
-		}
-
-		if cfg.IntervalMs > 0 {
-			time.Sleep(time.Duration(cfg.IntervalMs) * time.Millisecond)
-		}
+		}()
 	}
+
+	wg.Wait()
 }
 
 func applyDefaultConfig(cfg Config) Config {
@@ -259,8 +273,8 @@ func applyDefaultConfig(cfg Config) Config {
 	if cfg.WorkerCount <= 0 {
 		cfg.WorkerCount = 1
 	}
-	if cfg.IntervalMs <= 0 {
-		cfg.IntervalMs = 2000 // 預設每 2 秒下一單，更接近真實交易所節奏
+	if cfg.IntervalMs < 0 {
+		cfg.IntervalMs = 300 // 預設放慢一點
 	}
 	return cfg
 }
