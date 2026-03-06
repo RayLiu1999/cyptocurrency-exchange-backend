@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,6 +24,10 @@ const (
 	StatusFilled          OrderStatus = "FILLED"           // 完全成交
 	StatusCanceled        OrderStatus = "CANCELED"         // 已取消
 	StatusRejected        OrderStatus = "REJECTED"         // 已拒絕
+)
+
+var (
+	ErrInsufficientFunds = fmt.Errorf("insufficient funds")
 )
 
 type User struct {
@@ -68,10 +73,10 @@ type Trade struct {
 }
 
 type KLine struct {
-	Time   time.Time       `json:"time"`   // K 線的開始時間
-	Open   decimal.Decimal `json:"open"`   // 開盤價
-	High   decimal.Decimal `json:"high"`   // 最高價
-	Low    decimal.Decimal `json:"low"`    // 最低價
-	Close  decimal.Decimal `json:"close"`  // 收盤價
-	Volume decimal.Decimal `json:"volume"` // 成交量
+	Timestamp time.Time       `json:"timestamp"` // K 線的開始時間
+	Open      decimal.Decimal `json:"open"`      // 開盤價
+	High      decimal.Decimal `json:"high"`      // 最高價
+	Low       decimal.Decimal `json:"low"`       // 最低價
+	Close     decimal.Decimal `json:"close"`     // 收盤價
+	Volume    decimal.Decimal `json:"volume"`    // 成交量
 }
