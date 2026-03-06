@@ -3,6 +3,7 @@ package matching
 import (
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 )
@@ -68,7 +69,7 @@ func TestOrderBook_NewOrderBook_CreatesEmptyBook(t *testing.T) {
 
 func TestOrderBook_AddOrder_BuyOrderGoesToBids(t *testing.T) {
 	book := NewOrderBook("BTC-USD")
-	order := NewOrder(SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1))
+	order := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1))
 
 	book.AddOrder(order)
 
@@ -78,7 +79,7 @@ func TestOrderBook_AddOrder_BuyOrderGoesToBids(t *testing.T) {
 
 func TestOrderBook_AddOrder_SellOrderGoesToAsks(t *testing.T) {
 	book := NewOrderBook("BTC-USD")
-	order := NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
+	order := NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
 
 	book.AddOrder(order)
 
@@ -88,7 +89,7 @@ func TestOrderBook_AddOrder_SellOrderGoesToAsks(t *testing.T) {
 
 func TestEngine_EmptyBook_NoTrades(t *testing.T) {
 	engine := NewEngine("BTC-USD")
-	order := NewOrder(SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1))
+	order := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1))
 
 	trades := engine.Process(order)
 
@@ -104,11 +105,11 @@ func TestEngine_BuyPriceMatchesSellPrice_TradeExecuted(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
 	// 先掛一個賣單 (Maker): 價格 100，數量 1
-	sellOrder := NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
+	sellOrder := NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
 	engine.Process(sellOrder)
 
 	// 再來一個買單 (Taker): 價格 100，數量 1
-	buyOrder := NewOrder(SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1))
+	buyOrder := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1))
 
 	trades := engine.Process(buyOrder)
 
@@ -120,11 +121,11 @@ func TestEngine_TradePrice_EqualsMakerPrice(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
 	// Maker 賣單: 價格 100
-	sellOrder := NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
+	sellOrder := NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
 	engine.Process(sellOrder)
 
 	// Taker 買單: 價格 105 (願意出更高價)
-	buyOrder := NewOrder(SideBuy, decimal.NewFromInt(105), decimal.NewFromInt(1))
+	buyOrder := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(105), decimal.NewFromInt(1))
 
 	trades := engine.Process(buyOrder)
 
@@ -135,11 +136,11 @@ func TestEngine_TradePrice_EqualsMakerPrice(t *testing.T) {
 func TestEngine_AfterFullMatch_OrdersRemovedFromBook(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
-	sellOrder := NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
+	sellOrder := NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
 	engine.Process(sellOrder)
 	assert.Equal(t, 1, engine.OrderBook().AskCount())
 
-	buyOrder := NewOrder(SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1))
+	buyOrder := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1))
 	engine.Process(buyOrder)
 
 	assert.Equal(t, 0, engine.OrderBook().AskCount(), "成交後賣單應移除")
@@ -155,13 +156,13 @@ func TestEngine_PricePriority_LowestAskMatchesFirst(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
 	// 先掛兩個賣單：價格 102 和 100
-	sell1 := NewOrder(SideSell, decimal.NewFromInt(102), decimal.NewFromInt(1))
-	sell2 := NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
+	sell1 := NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(102), decimal.NewFromInt(1))
+	sell2 := NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
 	engine.Process(sell1)
 	engine.Process(sell2)
 
 	// 買單：價格 105，數量 1 (只買一個)
-	buyOrder := NewOrder(SideBuy, decimal.NewFromInt(105), decimal.NewFromInt(1))
+	buyOrder := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(105), decimal.NewFromInt(1))
 
 	trades := engine.Process(buyOrder)
 
@@ -175,13 +176,13 @@ func TestEngine_PricePriority_HighestBidMatchesFirst(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
 	// 先掛兩個買單：價格 98 和 100
-	buy1 := NewOrder(SideBuy, decimal.NewFromInt(98), decimal.NewFromInt(1))
-	buy2 := NewOrder(SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1))
+	buy1 := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(98), decimal.NewFromInt(1))
+	buy2 := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1))
 	engine.Process(buy1)
 	engine.Process(buy2)
 
 	// 賣單：價格 95，數量 1 (只賣一個)
-	sellOrder := NewOrder(SideSell, decimal.NewFromInt(95), decimal.NewFromInt(1))
+	sellOrder := NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(95), decimal.NewFromInt(1))
 
 	trades := engine.Process(sellOrder)
 
@@ -199,13 +200,13 @@ func TestEngine_TimePriority_FirstOrderMatchesFirst(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
 	// 掛兩個同價位的賣單
-	sell1 := NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
-	sell2 := NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
+	sell1 := NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
+	sell2 := NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
 	engine.Process(sell1)
 	engine.Process(sell2)
 
 	// 買單：只買一個
-	buyOrder := NewOrder(SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1))
+	buyOrder := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1))
 
 	trades := engine.Process(buyOrder)
 
@@ -223,13 +224,13 @@ func TestEngine_PartialFill_TakerLargerThanMaker(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
 	// 掛兩個小賣單，每個數量 1
-	sell1 := NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
-	sell2 := NewOrder(SideSell, decimal.NewFromInt(101), decimal.NewFromInt(1))
+	sell1 := NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
+	sell2 := NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(101), decimal.NewFromInt(1))
 	engine.Process(sell1)
 	engine.Process(sell2)
 
 	// 大買單：數量 2，會吃掉兩個賣單
-	buyOrder := NewOrder(SideBuy, decimal.NewFromInt(105), decimal.NewFromInt(2))
+	buyOrder := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(105), decimal.NewFromInt(2))
 
 	trades := engine.Process(buyOrder)
 
@@ -245,11 +246,11 @@ func TestEngine_PartialFill_TakerSmallerThanMaker(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
 	// 掛一個大賣單：數量 10
-	sellOrder := NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(10))
+	sellOrder := NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(100), decimal.NewFromInt(10))
 	engine.Process(sellOrder)
 
 	// 小買單：數量 3
-	buyOrder := NewOrder(SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(3))
+	buyOrder := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(3))
 
 	trades := engine.Process(buyOrder)
 
@@ -267,11 +268,11 @@ func TestEngine_PartialFill_TakerRemainsInBook(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
 	// 掛一個小賣單：數量 2
-	sellOrder := NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(2))
+	sellOrder := NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(100), decimal.NewFromInt(2))
 	engine.Process(sellOrder)
 
 	// 大買單：數量 5，只能成交 2
-	buyOrder := NewOrder(SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(5))
+	buyOrder := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(5))
 
 	trades := engine.Process(buyOrder)
 
@@ -294,12 +295,12 @@ func TestEngine_MultipleMatches_LargeOrderMatchesMultiple(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
 	// 掛三個賣單，不同價格
-	engine.Process(NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1)))
-	engine.Process(NewOrder(SideSell, decimal.NewFromInt(101), decimal.NewFromInt(2)))
-	engine.Process(NewOrder(SideSell, decimal.NewFromInt(102), decimal.NewFromInt(3)))
+	engine.Process(NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1)))
+	engine.Process(NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(101), decimal.NewFromInt(2)))
+	engine.Process(NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(102), decimal.NewFromInt(3)))
 
 	// 大買單：數量 5，價格 102
-	buyOrder := NewOrder(SideBuy, decimal.NewFromInt(102), decimal.NewFromInt(5))
+	buyOrder := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(102), decimal.NewFromInt(5))
 
 	trades := engine.Process(buyOrder)
 
@@ -323,11 +324,11 @@ func TestEngine_MarketBuyOrder_MatchesLowestAsk(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
 	// 掛兩個賣單
-	engine.Process(NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1)))
-	engine.Process(NewOrder(SideSell, decimal.NewFromInt(102), decimal.NewFromInt(1)))
+	engine.Process(NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1)))
+	engine.Process(NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(102), decimal.NewFromInt(1)))
 
 	// 市價買單：數量 1
-	marketBuy := NewMarketOrder(SideBuy, decimal.NewFromInt(1))
+	marketBuy := NewMarketOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(1))
 
 	trades := engine.Process(marketBuy)
 
@@ -341,11 +342,11 @@ func TestEngine_MarketSellOrder_MatchesHighestBid(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
 	// 掛兩個買單
-	engine.Process(NewOrder(SideBuy, decimal.NewFromInt(98), decimal.NewFromInt(1)))
-	engine.Process(NewOrder(SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1)))
+	engine.Process(NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(98), decimal.NewFromInt(1)))
+	engine.Process(NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1)))
 
 	// 市價賣單：數量 1
-	marketSell := NewMarketOrder(SideSell, decimal.NewFromInt(1))
+	marketSell := NewMarketOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(1))
 
 	trades := engine.Process(marketSell)
 
@@ -359,12 +360,12 @@ func TestEngine_MarketOrder_MatchesMultipleMakers(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
 	// 掛三個賣單
-	engine.Process(NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1)))
-	engine.Process(NewOrder(SideSell, decimal.NewFromInt(101), decimal.NewFromInt(2)))
-	engine.Process(NewOrder(SideSell, decimal.NewFromInt(102), decimal.NewFromInt(3)))
+	engine.Process(NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1)))
+	engine.Process(NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(101), decimal.NewFromInt(2)))
+	engine.Process(NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(102), decimal.NewFromInt(3)))
 
 	// 市價買單：數量 4 (吃掉前兩個賣單 + 第三個部分)
-	marketBuy := NewMarketOrder(SideBuy, decimal.NewFromInt(4))
+	marketBuy := NewMarketOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(4))
 
 	trades := engine.Process(marketBuy)
 
@@ -380,10 +381,10 @@ func TestEngine_MarketOrder_PartialFillWhenInsufficientLiquidity(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
 	// 掛一個賣單：數量 2
-	engine.Process(NewOrder(SideSell, decimal.NewFromInt(100), decimal.NewFromInt(2)))
+	engine.Process(NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(100), decimal.NewFromInt(2)))
 
 	// 市價買單：數量 5 (超過訂單簿深度)
-	marketBuy := NewMarketOrder(SideBuy, decimal.NewFromInt(5))
+	marketBuy := NewMarketOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(5))
 
 	trades := engine.Process(marketBuy)
 
@@ -404,12 +405,12 @@ func TestEngineManager_DifferentSymbols_NoMatch(t *testing.T) {
 
 	// BTC-USD 掛一個賣單
 	btcEngine := manager.GetEngine("BTC-USD")
-	btcSell := NewOrder(SideSell, decimal.NewFromInt(50000), decimal.NewFromInt(1))
+	btcSell := NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(50000), decimal.NewFromInt(1))
 	btcEngine.Process(btcSell)
 
 	// ETH-USD 掛一個買單 (不應與 BTC-USD 的賣單撮合)
 	ethEngine := manager.GetEngine("ETH-USD")
-	ethBuy := NewOrder(SideBuy, decimal.NewFromInt(50000), decimal.NewFromInt(1))
+	ethBuy := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(50000), decimal.NewFromInt(1))
 	trades := ethEngine.Process(ethBuy)
 
 	assert.Empty(t, trades, "不同交易對不應撮合")
@@ -424,11 +425,11 @@ func TestEngineManager_SameSymbol_MatchesCorrectly(t *testing.T) {
 	engine := manager.GetEngine("BTC-USD")
 
 	// 掛賣單
-	sellOrder := NewOrder(SideSell, decimal.NewFromInt(50000), decimal.NewFromInt(1))
+	sellOrder := NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(50000), decimal.NewFromInt(1))
 	engine.Process(sellOrder)
 
 	// 同交易對買單應撮合
-	buyOrder := NewOrder(SideBuy, decimal.NewFromInt(50000), decimal.NewFromInt(1))
+	buyOrder := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(50000), decimal.NewFromInt(1))
 	trades := engine.Process(buyOrder)
 
 	assert.Len(t, trades, 1, "同交易對應撮合")

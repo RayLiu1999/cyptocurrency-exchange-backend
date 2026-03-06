@@ -1,9 +1,11 @@
 package matching
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 // OrderBook 訂單簿，儲存買賣訂單
@@ -42,13 +44,13 @@ func (ob *OrderBook) AddOrder(order *Order) {
 	if order.Side == SideBuy {
 		ob.bids = append(ob.bids, order)
 		// 按價格降序排列 (價格高的在前面)
-		sort.Slice(ob.bids, func(i, j int) bool {
+		sort.SliceStable(ob.bids, func(i, j int) bool {
 			return ob.bids[i].Price.GreaterThan(ob.bids[j].Price)
 		})
 	} else {
 		ob.asks = append(ob.asks, order)
 		// 按價格升序排列 (價格低的在前面)
-		sort.Slice(ob.asks, func(i, j int) bool {
+		sort.SliceStable(ob.asks, func(i, j int) bool {
 			return ob.asks[i].Price.LessThan(ob.asks[j].Price)
 		})
 	}
@@ -105,4 +107,29 @@ func (ob *OrderBook) RemoveOrder(orderID uuid.UUID, side OrderSide) {
 			}
 		}
 	}
+}
+
+// EstimateMarketBuyRequiredFunds 預估市價買單吃光需要的 quote currency (額度)
+func (ob *OrderBook) EstimateMarketBuyRequiredFunds(quantity decimal.Decimal) (decimal.Decimal, error) {
+	remainingQty := quantity
+	totalCost := decimal.Zero
+
+	for _, ask := range ob.asks {
+		// 需要吃的數量
+		matchQty := remainingQty
+		if ask.Quantity.LessThan(matchQty) {
+			matchQty = ask.Quantity
+		}
+
+		totalCost = totalCost.Add(ask.Price.Mul(matchQty))
+		remainingQty = remainingQty.Sub(matchQty)
+
+		if remainingQty.IsZero() {
+			return totalCost, nil
+		}
+	}
+
+	// 流動性不足，會有一部分無法成交，我們依然回傳全部把訂單簿吃光需要的價錢，
+	// 外層可以再加上剩餘數量乘上最後一檔價格作為估價，或者直接回傳 error 阻止下單。
+	return decimal.Zero, fmt.Errorf("insufficient liquidity to fulfill market buy (remaining: %s)", remainingQty)
 }

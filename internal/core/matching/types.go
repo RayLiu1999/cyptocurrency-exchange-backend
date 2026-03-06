@@ -26,6 +26,7 @@ const (
 // Order 撮合引擎內部使用的訂單結構
 type Order struct {
 	ID       uuid.UUID
+	UserID   uuid.UUID
 	Side     OrderSide
 	Type     OrderType
 	Price    decimal.Decimal
@@ -33,9 +34,10 @@ type Order struct {
 }
 
 // NewOrder 建立新限價訂單
-func NewOrder(side OrderSide, price, quantity decimal.Decimal) *Order {
+func NewOrder(id, userID uuid.UUID, side OrderSide, price, quantity decimal.Decimal) *Order {
 	return &Order{
-		ID:       uuid.New(),
+		ID:       id,
+		UserID:   userID,
 		Side:     side,
 		Type:     TypeLimit,
 		Price:    price,
@@ -44,9 +46,10 @@ func NewOrder(side OrderSide, price, quantity decimal.Decimal) *Order {
 }
 
 // NewMarketOrder 建立新市價訂單
-func NewMarketOrder(side OrderSide, quantity decimal.Decimal) *Order {
+func NewMarketOrder(id, userID uuid.UUID, side OrderSide, quantity decimal.Decimal) *Order {
 	return &Order{
-		ID:       uuid.New(),
+		ID:       id,
+		UserID:   userID,
 		Side:     side,
 		Type:     TypeMarket,
 		Price:    decimal.Zero, // 市價單不指定價格

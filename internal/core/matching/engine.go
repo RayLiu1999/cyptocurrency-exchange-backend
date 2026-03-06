@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 // Engine 撮合引擎
@@ -61,6 +62,13 @@ func (e *Engine) matchBuyOrder(buyOrder *Order) []*Trade {
 			break // 沒有賣單可匹配
 		}
 
+		// Wash Trade Prevention: 避免左手換右手
+		if buyOrder.UserID == bestAsk.UserID {
+			// 如果對手是自己，不予撮合，直接從 OrderBook 移除自己的舊單來釋放流動性，然後看下一個最佳賣單
+			e.orderBook.RemoveBestAsk()
+			continue
+		}
+
 		// 檢查價格是否匹配：限價單需檢查，市價單直接成交
 		if buyOrder.Type != TypeMarket && buyOrder.Price.LessThan(bestAsk.Price) {
 			break // 價格不匹配
@@ -111,6 +119,12 @@ func (e *Engine) matchSellOrder(sellOrder *Order) []*Trade {
 		bestBid := e.orderBook.BestBid()
 		if bestBid == nil {
 			break // 沒有買單可匹配
+		}
+
+		// Wash Trade Prevention: 避免左手換右手
+		if sellOrder.UserID == bestBid.UserID {
+			e.orderBook.RemoveBestBid()
+			continue
 		}
 
 		// 檢查價格是否匹配：限價單需檢查，市價單直接成交
@@ -196,4 +210,11 @@ func (e *Engine) GetOrderBookSnapshot(depth int) *OrderBookSnapshot {
 	}
 
 	return snapshot
+}
+
+// EstimateMarketBuyRequiredFunds 預估市價買單所需資金
+func (e *Engine) EstimateMarketBuyRequiredFunds(quantity decimal.Decimal) (decimal.Decimal, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.orderBook.EstimateMarketBuyRequiredFunds(quantity)
 }
