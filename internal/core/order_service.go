@@ -194,18 +194,20 @@ func (s *ExchangeServiceImpl) CancelOrder(ctx context.Context, orderID, userID u
 			s.tradeListener.OnOrderUpdate(order)
 		}
 
-		// 從記憶體引擎移除
-		engine := s.engineManager.GetEngine(order.Symbol)
+		return nil
+	})
+
+	// 事務確定成功 (DB COMMIT 成功) 後，才去動記憶體
+	if err == nil {
+		engine := s.engineManager.GetEngine(orderPreCheck.Symbol)
 		var matchSide matching.OrderSide
-		if order.Side == SideBuy {
+		if orderPreCheck.Side == SideBuy {
 			matchSide = matching.SideBuy
 		} else {
 			matchSide = matching.SideSell
 		}
-		engine.Cancel(order.ID, matchSide)
-
-		return nil
-	})
+		engine.Cancel(orderID, matchSide)
+	}
 
 	return err
 }
