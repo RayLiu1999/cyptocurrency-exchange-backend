@@ -32,11 +32,22 @@ func (h *Handler) PlaceOrder(c *gin.Context) {
 		return
 	}
 
+	side, err := core.SideFromString(req.Side)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	orderType, err := core.TypeFromString(req.Type)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	order := &core.Order{
 		UserID:   userID,
 		Symbol:   req.Symbol,
-		Side:     core.OrderSide(req.Side),
-		Type:     core.OrderType(req.Type),
+		Side:     side,
+		Type:     orderType,
 		Price:    req.Price,
 		Quantity: req.Quantity,
 	}
@@ -48,7 +59,7 @@ func (h *Handler) PlaceOrder(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{
 		"id":              order.ID,
-		"status":          order.Status,
+		"status":          core.StatusToString(order.Status),
 		"filled_quantity": order.FilledQuantity,
 	})
 }
@@ -72,12 +83,12 @@ func (h *Handler) GetOrder(c *gin.Context) {
 		"id":              order.ID,
 		"user_id":         order.UserID,
 		"symbol":          order.Symbol,
-		"side":            order.Side,
-		"type":            order.Type,
+		"side":            core.SideToString(order.Side),
+		"type":            core.TypeToString(order.Type),
 		"price":           order.Price,
 		"quantity":        order.Quantity,
 		"filled_quantity": order.FilledQuantity,
-		"status":          order.Status,
+		"status":          core.StatusToString(order.Status),
 		"created_at":      order.CreatedAt,
 	})
 }
@@ -107,8 +118,8 @@ func (h *Handler) GetOrders(c *gin.Context) {
 		result[i] = gin.H{
 			"id":              order.ID,
 			"symbol":          order.Symbol,
-			"side":            order.Side,
-			"status":          order.Status,
+			"side":            core.SideToString(order.Side),
+			"status":          core.StatusToString(order.Status),
 			"price":           order.Price,
 			"quantity":        order.Quantity,
 			"filled_quantity": order.FilledQuantity,

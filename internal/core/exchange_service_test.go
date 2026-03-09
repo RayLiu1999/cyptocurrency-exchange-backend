@@ -46,11 +46,12 @@ func TestProcessTrade_MakerFilledQuantityIncreases(t *testing.T) {
 	takerOrder := &Order{
 		ID:     trade.TakerOrderID,
 		UserID: uuid.New(),
+		Symbol: "BTC-USD",
 		Side:   SideBuy,
 	}
 
 	// Mock expectations
-	orderRepo.On("GetOrder", ctx, makerOrderID).Return(makerOrder, nil)
+	orderRepo.On("GetOrderForUpdate", ctx, makerOrderID).Return(makerOrder, nil)
 	orderRepo.On("UpdateOrder", ctx, mock.AnythingOfType("*core.Order")).Return(nil)
 	accountRepo.On("UnlockFunds", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	accountRepo.On("UpdateBalance", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
@@ -95,11 +96,12 @@ func TestProcessTrade_MakerStatusUpdated(t *testing.T) {
 	takerOrder := &Order{
 		ID:     trade.TakerOrderID,
 		UserID: uuid.New(),
+		Symbol: "BTC-USD",
 		Side:   SideBuy,
 	}
 
 	// Mock expectations
-	orderRepo.On("GetOrder", ctx, makerOrderID).Return(makerOrder, nil)
+	orderRepo.On("GetOrderForUpdate", ctx, makerOrderID).Return(makerOrder, nil)
 	orderRepo.On("UpdateOrder", ctx, mock.AnythingOfType("*core.Order")).Return(nil)
 	accountRepo.On("UnlockFunds", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	accountRepo.On("UpdateBalance", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
@@ -128,6 +130,7 @@ func TestSettleTrade_BuyerUnlocksUSDAndReceivesBTC(t *testing.T) {
 	takerOrder := &Order{
 		ID:     uuid.New(),
 		UserID: uuid.New(),
+		Symbol: "BTC-USD",
 		Side:   SideBuy, // Taker 是買方
 	}
 
@@ -169,6 +172,7 @@ func TestSettleTrade_SellerUnlocksBTCAndReceivesUSD(t *testing.T) {
 	takerOrder := &Order{
 		ID:     uuid.New(),
 		UserID: uuid.New(),
+		Symbol: "BTC-USD",
 		Side:   SideSell, // Taker 是賣方
 	}
 

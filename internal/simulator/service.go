@@ -181,7 +181,7 @@ func (s *Service) runSimulation(ctx context.Context, traders []Trader, cfg Confi
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r := rand.New(rand.NewSource(time.Now().UnixNano()))
+			r := rand.New(rand.NewSource(time.Now().UnixNano() + int64(i)))
 
 			for {
 				select {
@@ -243,6 +243,9 @@ func (s *Service) runSimulation(ctx context.Context, traders []Trader, cfg Confi
 
 				if err := s.svc.PlaceOrder(ctx, order); err != nil {
 					log.Printf("❌ 模擬下單失敗: %v", err)
+					if errors.Is(err, core.ErrInsufficientFunds) {
+						s.svc.RechargeTestUser(ctx, trader.ID)
+					}
 				} else {
 					atomic.AddInt64(&s.sentTx, 1)
 				}

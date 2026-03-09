@@ -103,6 +103,7 @@ func TestCancelOrder_Success_UnlocksFundsAndUpdatesStatus(t *testing.T) {
 	}
 
 	orderRepo.On("GetOrder", ctx, orderID).Return(existingOrder, nil)
+	orderRepo.On("GetOrderForUpdate", ctx, orderID).Return(existingOrder, nil) // FOR UPDATE 在事務內重新讀取
 	orderRepo.On("UpdateOrder", ctx, mock.Anything).Return(nil)
 	accountRepo.On("UnlockFunds", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 

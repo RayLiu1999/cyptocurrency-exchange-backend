@@ -24,6 +24,7 @@ go.work
 # Environment variables
 .env
 .env.local
+*.csv
 
 # IDE
 .vscode/

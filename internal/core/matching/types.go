@@ -1,26 +1,22 @@
 package matching
 
 import (
-	"time"
-
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
 
-// OrderSide 訂單方向
-type OrderSide string
+// OrderSide 訂單方向 (1=BUY, 2=SELL)
+type OrderSide int16
+
+// OrderType 訂單類型 (1=LIMIT, 2=MARKET)
+type OrderType int16
 
 const (
-	SideBuy  OrderSide = "BUY"
-	SideSell OrderSide = "SELL"
-)
+	SideBuy  OrderSide = 1
+	SideSell OrderSide = 2
 
-// OrderType 訂單類型
-type OrderType string
-
-const (
-	TypeLimit  OrderType = "LIMIT"
-	TypeMarket OrderType = "MARKET"
+	TypeLimit  OrderType = 1
+	TypeMarket OrderType = 2
 )
 
 // Order 撮合引擎內部使用的訂單結構
@@ -65,7 +61,7 @@ type Trade struct {
 	TakerOrderID uuid.UUID       `json:"taker_order_id"`
 	Price        decimal.Decimal `json:"price"`
 	Quantity     decimal.Decimal `json:"quantity"`
-	CreatedAt    time.Time       `json:"created_at"`
+	CreatedAt    int64           `json:"created_at"` // Unix 毫秒
 }
 
 // OrderBookLevel 訂單簿深度層級

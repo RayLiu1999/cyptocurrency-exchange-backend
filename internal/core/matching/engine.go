@@ -64,9 +64,7 @@ func (e *Engine) matchBuyOrder(buyOrder *Order) []*Trade {
 
 		// Wash Trade Prevention: 避免左手換右手
 		if buyOrder.UserID == bestAsk.UserID {
-			// 如果對手是自己，不予撮合，直接從 OrderBook 移除自己的舊單來釋放流動性，然後看下一個最佳賣單
-			e.orderBook.RemoveBestAsk()
-			continue
+			break
 		}
 
 		// 檢查價格是否匹配：限價單需檢查，市價單直接成交
@@ -81,14 +79,15 @@ func (e *Engine) matchBuyOrder(buyOrder *Order) []*Trade {
 		}
 
 		// 建立成交記錄
+		tradeID, _ := uuid.NewV7()
 		trade := &Trade{
-			ID:           uuid.New(),
+			ID:           tradeID,
 			Symbol:       e.orderBook.Symbol(),
 			MakerOrderID: bestAsk.ID,
 			TakerOrderID: buyOrder.ID,
 			Price:        bestAsk.Price, // 成交價格 = Maker 價格
 			Quantity:     matchQty,
-			CreatedAt:    time.Now().UTC(),
+			CreatedAt:    time.Now().UnixMilli(),
 		}
 		trades = append(trades, trade)
 
@@ -123,8 +122,7 @@ func (e *Engine) matchSellOrder(sellOrder *Order) []*Trade {
 
 		// Wash Trade Prevention: 避免左手換右手
 		if sellOrder.UserID == bestBid.UserID {
-			e.orderBook.RemoveBestBid()
-			continue
+			break
 		}
 
 		// 檢查價格是否匹配：限價單需檢查，市價單直接成交
@@ -139,14 +137,15 @@ func (e *Engine) matchSellOrder(sellOrder *Order) []*Trade {
 		}
 
 		// 建立成交記錄
+		tradeID, _ := uuid.NewV7()
 		trade := &Trade{
-			ID:           uuid.New(),
+			ID:           tradeID,
 			Symbol:       e.orderBook.Symbol(),
 			MakerOrderID: bestBid.ID,
 			TakerOrderID: sellOrder.ID,
 			Price:        bestBid.Price, // 成交價格 = Maker 價格
 			Quantity:     matchQty,
-			CreatedAt:    time.Now().UTC(),
+			CreatedAt:    time.Now().UnixMilli(),
 		}
 		trades = append(trades, trade)
 

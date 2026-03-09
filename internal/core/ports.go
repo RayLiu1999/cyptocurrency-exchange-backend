@@ -23,6 +23,7 @@ type TradeEventListener interface {
 type OrderRepository interface {
 	CreateOrder(ctx context.Context, order *Order) error
 	GetOrder(ctx context.Context, id uuid.UUID) (*Order, error)
+	GetOrderForUpdate(ctx context.Context, id uuid.UUID) (*Order, error) // 加悲觀鎖（FOR UPDATE）
 	UpdateOrder(ctx context.Context, order *Order) error
 	GetOrdersByUser(ctx context.Context, userID uuid.UUID) ([]*Order, error)
 	DeleteAllOrders(ctx context.Context) error
@@ -64,4 +65,5 @@ type ExchangeService interface {
 	GetKLines(ctx context.Context, symbol string, interval string, limit int) ([]*KLine, error)
 	GetRecentTrades(ctx context.Context, symbol string, limit int) ([]*matching.Trade, error)
 	ClearSimulationData(ctx context.Context) error
+	RechargeTestUser(ctx context.Context, userID uuid.UUID) error
 }

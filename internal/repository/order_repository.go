@@ -29,16 +29,20 @@ func (r *PostgresRepository) GetOrder(ctx context.Context, id uuid.UUID) (*core.
 		FROM orders WHERE id = $1`
 
 	row := executor.QueryRow(ctx, query, id)
-	var o core.Order
-	err := row.Scan(
-		&o.ID, &o.UserID, &o.Symbol, &o.Side, &o.Type,
-		&o.Price, &o.Quantity, &o.FilledQuantity, &o.Status,
-		&o.CreatedAt, &o.UpdatedAt)
+	return scanOrder(row)
+}
 
-	if err != nil {
-		return nil, err
-	}
-	return &o, nil
+// GetOrderForUpdate 加上 FOR UPDATE 悲觀鎖，防止 CancelOrder 與 ProcessTrade 發生競態條件
+// 必須在事務 (ExecTx) 內部呼叫才有效
+func (r *PostgresRepository) GetOrderForUpdate(ctx context.Context, id uuid.UUID) (*core.Order, error) {
+	executor := r.getExecutor(ctx)
+	query := `
+		SELECT id, user_id, symbol, side, type, price, quantity, filled_quantity, status, created_at, updated_at
+		FROM orders WHERE id = $1
+		FOR UPDATE`
+
+	row := executor.QueryRow(ctx, query, id)
+	return scanOrder(row)
 }
 
 func (r *PostgresRepository) UpdateOrder(ctx context.Context, order *core.Order) error {
@@ -68,15 +72,14 @@ func (r *PostgresRepository) GetOrdersByUser(ctx context.Context, userID uuid.UU
 
 	var orders []*core.Order
 	for rows.Next() {
-		var o core.Order
-		err := rows.Scan(
-			&o.ID, &o.UserID, &o.Symbol, &o.Side, &o.Type,
-			&o.Price, &o.Quantity, &o.FilledQuantity, &o.Status,
-			&o.CreatedAt, &o.UpdatedAt)
+		o, err := scanOrder(rows)
 		if err != nil {
 			return nil, err
 		}
-		orders = append(orders, &o)
+		orders = append(orders, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return orders, nil
 }
@@ -85,4 +88,21 @@ func (r *PostgresRepository) DeleteAllOrders(ctx context.Context) error {
 	executor := r.getExecutor(ctx)
 	_, err := executor.Exec(ctx, "DELETE FROM orders")
 	return err
+}
+
+// scanOrder 共用掃描邏輯，減少重複程式碼
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanOrder(row rowScanner) (*core.Order, error) {
+	var o core.Order
+	err := row.Scan(
+		&o.ID, &o.UserID, &o.Symbol, &o.Side, &o.Type,
+		&o.Price, &o.Quantity, &o.FilledQuantity, &o.Status,
+		&o.CreatedAt, &o.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &o, nil
 }

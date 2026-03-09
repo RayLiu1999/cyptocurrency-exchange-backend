@@ -11,8 +11,11 @@ import (
 
 // RegisterAnonymousUser 建立匿名用戶並發放測試金
 func (s *ExchangeServiceImpl) RegisterAnonymousUser(ctx context.Context) (*User, []*Account, error) {
-	newUserID := uuid.New()
-	now := time.Now()
+	newUserID, err := uuid.NewV7()
+	if err != nil {
+		return nil, nil, fmt.Errorf("產生用戶 ID 失敗: %w", err)
+	}
+	now := time.Now().UnixMilli()
 
 	user := &User{
 		ID:           newUserID,
@@ -33,14 +36,18 @@ func (s *ExchangeServiceImpl) RegisterAnonymousUser(ctx context.Context) (*User,
 
 	var accounts []*Account
 
-	err := s.txManager.ExecTx(ctx, func(ctx context.Context) error {
+	err = s.txManager.ExecTx(ctx, func(ctx context.Context) error {
 		if err := s.userRepo.CreateUser(ctx, user); err != nil {
 			return fmt.Errorf("建立用戶失敗: %w", err)
 		}
 
 		for _, c := range currencies {
+			accID, err := uuid.NewV7()
+			if err != nil {
+				return fmt.Errorf("產生帳戶 ID 失敗: %w", err)
+			}
 			acc := &Account{
-				ID:        uuid.New(),
+				ID:        accID,
 				UserID:    newUserID,
 				Currency:  c.code,
 				Balance:   c.amount,
@@ -65,4 +72,19 @@ func (s *ExchangeServiceImpl) RegisterAnonymousUser(ctx context.Context) (*User,
 
 func (s *ExchangeServiceImpl) GetBalances(ctx context.Context, userID uuid.UUID) ([]*Account, error) {
 	return s.accountRepo.GetAccountsByUser(ctx, userID)
+}
+
+// RechargeTestUser 模擬器專用充值後門
+func (s *ExchangeServiceImpl) RechargeTestUser(ctx context.Context, userID uuid.UUID) error {
+	base, quote := "BTC", "USD"
+
+	return s.txManager.ExecTx(ctx, func(ctx context.Context) error {
+		if err := s.accountRepo.UpdateBalance(ctx, userID, base, decimal.NewFromFloat(10)); err != nil {
+			return err
+		}
+		if err := s.accountRepo.UpdateBalance(ctx, userID, quote, decimal.NewFromFloat(100000)); err != nil {
+			return err
+		}
+		return nil
+	})
 }

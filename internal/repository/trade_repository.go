@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/RayLiu1999/exchange/internal/core"
 	"github.com/RayLiu1999/exchange/internal/core/matching"
@@ -24,12 +25,12 @@ func (r *PostgresRepository) CreateTrade(ctx context.Context, trade *matching.Tr
 func (r *PostgresRepository) GetKLines(ctx context.Context, symbol string, interval string, limit int) ([]*core.KLine, error) {
 	executor := r.getExecutor(ctx)
 
-	// 注意：這裡是一個簡化版的 K 線查詢，實際上應該要預先計算或使用 TimescaleDB
-	// 這裡示範如何從 trades 原始表動態聚合。
+	// 使用 time_bucket 函式聚合 K 線（需要 TimescaleDB 擴充）
+	// created_at 為 BIGINT (UnixMilli)，需先轉換為 timestamp 再做時間桶聚合
 	// $1: symbol, $2: interval (e.g., '1 minute'), $3: limit
 	query := `
 		SELECT 
-			time_bucket($2, created_at) AS bucket,
+			EXTRACT(EPOCH FROM time_bucket($2, to_timestamp(created_at / 1000.0))) * 1000 AS bucket,
 			(array_agg(price ORDER BY created_at ASC))[1] AS open,
 			MAX(price) AS high,
 			MIN(price) AS low,
@@ -41,8 +42,6 @@ func (r *PostgresRepository) GetKLines(ctx context.Context, symbol string, inter
 		ORDER BY bucket DESC
 		LIMIT $3`
 
-	// 如果沒有安裝 TimescaleDB，可以用原生 SQL 模擬時鐘桶
-	// 為了保證通用性，這裡假設有底層支援或改用原生時鐘聚合
 	rows, err := executor.Query(ctx, query, symbol, interval, limit)
 	if err != nil {
 		return nil, err
@@ -57,6 +56,9 @@ func (r *PostgresRepository) GetKLines(ctx context.Context, symbol string, inter
 			return nil, err
 		}
 		klines = append(klines, &k)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return klines, nil
 }
@@ -85,6 +87,9 @@ func (r *PostgresRepository) GetRecentTrades(ctx context.Context, symbol string,
 		}
 		trades = append(trades, &t)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return trades, nil
 }
 
@@ -92,4 +97,9 @@ func (r *PostgresRepository) DeleteAllTrades(ctx context.Context) error {
 	executor := r.getExecutor(ctx)
 	_, err := executor.Exec(ctx, "DELETE FROM trades")
 	return err
+}
+
+// nowMilli 回傳目前的 Unix 毫秒，供 repository 層使用
+func nowMilli() int64 {
+	return time.Now().UnixMilli()
 }

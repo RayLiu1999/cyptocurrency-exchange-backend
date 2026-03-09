@@ -43,13 +43,13 @@ func NewExchangeService(orderRepo OrderRepository, accountRepo AccountRepository
 // Ensure implementation
 var _ ExchangeService = (*ExchangeServiceImpl)(nil)
 
-// ProcessTrade 處理成交結果
+// ProcessTrade 處理成交結果，必須在事務內呼叫
 func (s *ExchangeServiceImpl) ProcessTrade(ctx context.Context, trade *matching.Trade, takerOrder *Order) error {
 	log.Printf("成交: 價格=%s, 數量=%s, Maker=%s, Taker=%s",
 		trade.Price, trade.Quantity, trade.MakerOrderID, trade.TakerOrderID)
 
-	// 1. 取得 Maker 訂單
-	makerOrder, err := s.orderRepo.GetOrder(ctx, trade.MakerOrderID)
+	// 1. 使用 FOR UPDATE 鎖取得 Maker 訂單，防止 CancelOrder 競態條件
+	makerOrder, err := s.orderRepo.GetOrderForUpdate(ctx, trade.MakerOrderID)
 	if err != nil {
 		return fmt.Errorf("取得 Maker 訂單失敗: %w", err)
 	}
@@ -64,12 +64,10 @@ func (s *ExchangeServiceImpl) ProcessTrade(ctx context.Context, trade *matching.
 		makerOrder.Status = StatusPartiallyFilled
 	}
 
-	makerOrder.UpdatedAt = time.Now()
+	makerOrder.UpdatedAt = time.Now().UnixMilli()
 
-	// 4. 儲存 Maker 訂單 (傳入 trade.Quantity 作為 Delta)
-	makerDelta := *makerOrder
-	makerDelta.FilledQuantity = trade.Quantity
-	if err := s.orderRepo.UpdateOrder(ctx, &makerDelta); err != nil {
+	// 4. 儲存 Maker 訂單（確保 FilledQuantity 以當次 Delta 累加已在上方計算）
+	if err := s.orderRepo.UpdateOrder(ctx, makerOrder); err != nil {
 		return fmt.Errorf("更新 Maker 訂單失敗: %w", err)
 	}
 
@@ -82,12 +80,12 @@ func (s *ExchangeServiceImpl) ProcessTrade(ctx context.Context, trade *matching.
 		return fmt.Errorf("結算失敗: %w", err)
 	}
 
-	// 6. 儲存成交記錄 (持久化)
+	// 6. 儲存成交記錄
 	if err := s.tradeRepo.CreateTrade(ctx, trade); err != nil {
 		return fmt.Errorf("建立成交記錄失敗: %w", err)
 	}
 
-	// 7. 發送成交事件 (如果有設定監聽器)
+	// 7. 發送成交事件
 	if s.tradeListener != nil {
 		s.tradeListener.OnTrade(trade)
 	}
@@ -108,11 +106,12 @@ func (s *ExchangeServiceImpl) SettleTrade(ctx context.Context, trade *matching.T
 		seller = takerOrder
 	}
 
-	base, quote := s.splitSymbol(takerOrder.Symbol)
+	base, quote, err := s.splitSymbol(takerOrder.Symbol)
+	if err != nil {
+		return err
+	}
 
 	// 計算買方解鎖金額
-	// 如果是限價單，通常解鎖 Price * Quantity
-	// 如果是市價單，解鎖實際成交的 tradeValue
 	buyerUnlockAmount := tradeValue
 	if buyer.ID == takerOrder.ID {
 		if takerOrder.Type == TypeMarket {
@@ -163,11 +162,12 @@ func (s *ExchangeServiceImpl) SettleTrade(ctx context.Context, trade *matching.T
 	return nil
 }
 
-func (s *ExchangeServiceImpl) splitSymbol(symbol string) (base, quote string) {
+// splitSymbol 將交易對拆分成 base 和 quote
+func (s *ExchangeServiceImpl) splitSymbol(symbol string) (base, quote string, err error) {
 	symbol = strings.ToUpper(symbol)
 	parts := strings.Split(symbol, "-")
 	if len(parts) == 2 {
-		return parts[0], parts[1]
+		return parts[0], parts[1], nil
 	}
-	return "BTC", "USD"
+	return "", "", fmt.Errorf("無效的交易對格式: %s", symbol)
 }
