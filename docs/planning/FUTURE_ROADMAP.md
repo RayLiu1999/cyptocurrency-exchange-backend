@@ -43,7 +43,9 @@
 
 ## Stage 3：CCXT 多交易所平台（規劃 📋）
 
-完成 ECS 壓測學習後，保留撮合引擎核心，轉型為多交易所行情平台。
+完成 ECS 壓測學習後，**保留 Stage 1 撮合引擎作為 INTERNAL 模式**，新增 CCXT 軌道作為 PAPER 模式，兩者並行共存。
+
+> 💡 不是替換 Stage 1，而是在既有基礎上新增 CCXT 數據軌道。詳見 [ARCHITECTURE.md §4](../architecture/ARCHITECTURE.md)。
 
 ### 3.1 CCXT 適配層
 
@@ -68,4 +70,13 @@
 - [ ] 透過 CCXT WebSocket 訂閱 Ticker
 - [ ] 發布到 NATS JetStream（低延遲內部事件）
 - [ ] 驅動前端即時監控面板
+
+### 3.5 雙模態整合
+
+- [ ] `TradingModeMiddleware`：後端 middleware 解析 `X-Trading-Mode` Header
+- [ ] `ProviderRouter`：根據 mode context 路由至 Internal 或 CCXT 適配層
+- [ ] Paper Account 隔離：`paper_accounts` / `paper_orders` / `paper_trades` 獨立 Schema
+- [ ] 回測引擎模式分流：INTERNAL 用本地歷史成交、PAPER 用 CCXT 歷史 K 線
+- [ ] 前端 `TradingEnvironmentContext` 已完成（INTERNAL = 靛紫 / PAPER = 青綠）
+
 

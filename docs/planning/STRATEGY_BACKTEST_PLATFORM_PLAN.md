@@ -9,6 +9,7 @@
 - 📊 **高精度回測**：支援歷史 K 線回放，並結合自研撮合引擎進行成交模擬
 - 🤖 **抽象策略框架**：編寫一次策略，即可在不同交易所進行回測或模擬交易
 - 📈 **量化績效分析**：計算夏普比率、最大回撤等專業金融指標
+- 🏛️ **雙模態並行設計**：保留 Stage 1 自研撮合引擎作為「系統模擬 (INTERNAL)」，同時接入 CCXT 作為「市場模擬 (PAPER)」，兩條軌道並行共存，前端透過 `TradingEnvironmentContext` 隨時切換
 - 🎛️ **與微服務整合**：作為獨立服務運行，與 Order 及 Matching 服務解耦
 
 ---
@@ -344,12 +345,14 @@ GET    /api/v1/exchange/sync/status             - 同步狀態
 
 #### 4.2 前端組件規劃
 
-| 組件 | 功能 | 頁面類型 |
-|------|------|------|
-| Strategy Editor | 可視化/JSON 編輯策略參數 | 策略配置 |
-| Backtest Center | 歷史數據回放、盈虧曲線、回撤分析 | 策略中心 (靜態/批次) |
-| Paper Trading | 實時行情、持倉線、模擬掛單 | 交易看板 (動態/實時) |
-| Portfolio Monitor | 多交易所資產比例、風險指標 | 風控看板 |
+| 組件 | 功能 | 頁面類型 | INTERNAL 模式 | PAPER 模式 |
+|------|------|------|-------------|----------|
+| Strategy Editor | 可視化/JSON 編輯策略參數 | 策略配置 | 部署至系統模擬環境 | 部署至市場模擬環境 |
+| Backtest Center | 歷史數據回放、盈虧曲線、回撤分析 | 策略中心 (靜態/批次) | 本地歷史成交數據 | CCXT 歷史 K 線 |
+| Trading Dashboard | 即時行情、OrderBook、模擬掛單 | 交易看板 (動態/實時) | 自研撮合引擎 + Simulator | CCXT 即時行情 + Paper Trading |
+| Portfolio Monitor | 資產比例、風控指標 | 風控看板 | 本地帳戶餘額 | CCXT 帳戶資產 |
+
+> 💡 **雙模態設計原則**：所有頁面共用同一套 UI 佈局，透過前端 `TradingEnvironmentContext` 的 `mode` 狀態決定向後端請求哪個數據源。INTERNAL = 靛紫色調，PAPER = 青綠色調，全站即時切換。詳見 [ARCHITECTURE.md §4](../architecture/ARCHITECTURE.md)。
 
 ---
 

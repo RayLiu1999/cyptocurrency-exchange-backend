@@ -204,11 +204,162 @@ graph TD
 
 ---
 
+## 4. 雙模態交易環境（Dual-Mode Trading Environment）
+
+> **核心理念**：保留自研撮合引擎（Stage 1），同時接入 CCXT 真實行情（Stage 3），兩條軌道**並行共存**，透過統一的 `mode` context 在前後端全鏈路切換。
+
+### 4.1 為什麼需要雙模態？
+
+傳統演進路線是「替換型」— Stage 3 完成後 Stage 1 退役。但我們選擇**保留型**設計：
+
+| 考量 | 替換型（棄用 Stage 1） | 保留型（雙模態並行）✅ |
+|------|----------------------|----------------------|
+| 教學演示 | ❌ 失去本地可控環境 | ✅ 不依賴外部 API 即可完整展示 |
+| 壓力測試 | ❌ 受交易所 API 限流影響 | ✅ 本地撮合無任何外部限制 |
+| 離線開發 | ❌ 無網路無法運作 | ✅ 系統模擬完全離線可用 |
+| 策略驗證 | 只能用真實行情 | ✅ 本地快速迭代 → 真實行情驗證 |
+| 面試展示 | 依賴 API Key | ✅ 零配置即可 demo |
+
+### 4.2 兩種模式定義
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     INTERNAL（系統模擬）                                 │
+│  ─────────────────────────────────────────────────────────────────────  │
+│  資料來源：自研撮合引擎 + In-Memory OrderBook + PostgreSQL              │
+│  行情驅動：cmd/simulator 模擬下單產生行情                               │
+│  適用場景：教學、壓測、離線開發、面試 Demo                               │
+│  特色：零外部依賴，完全可控                                             │
+├─────────────────────────────────────────────────────────────────────────┤
+│                     PAPER（市場模擬）                                    │
+│  ─────────────────────────────────────────────────────────────────────  │
+│  資料來源：CCXT 多交易所即時行情 + 歷史 K 線 (TimescaleDB)              │
+│  行情驅動：Binance / OKX / Bybit WebSocket 即時推送                     │
+│  適用場景：策略回測驗證、真實行情體驗、Paper Trading                     │
+│  特色：貼近實盤但不動真金白銀                                           │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.3 後端架構設計
+
+#### 4.3.1 模式路由層
+
+前端透過 HTTP Header 或 Query Param 傳遞 `X-Trading-Mode: INTERNAL | PAPER`，後端 middleware 解析後注入 `context`：
+
+```go
+// internal/middleware/trading_mode.go
+func TradingModeMiddleware() gin.HandlerFunc {
+    return func(c *gin.Context) {
+        mode := c.GetHeader("X-Trading-Mode")
+        if mode == "" {
+            mode = "INTERNAL" // 預設系統模擬
+        }
+        ctx := context.WithValue(c.Request.Context(), TradingModeKey, mode)
+        c.Request = c.Request.WithContext(ctx)
+        c.Next()
+    }
+}
+```
+
+#### 4.3.2 Data Source 抽象（Provider Pattern）
+
+所有資料消費端不直接依賴具體實作，而是透過統一介面根據 `mode` 決定資料來源：
+
+```go
+// internal/core/ports.go — 統一資料供應介面
+type MarketDataProvider interface {
+    GetOrderBook(ctx context.Context, symbol string) (*OrderBook, error)
+    GetKLines(ctx context.Context, symbol, interval string, limit int) ([]*KLine, error)
+    SubscribeTicker(ctx context.Context, symbol string) (<-chan Ticker, error)
+}
+
+type OrderExecutor interface {
+    PlaceOrder(ctx context.Context, req OrderRequest) (*Order, error)
+    CancelOrder(ctx context.Context, orderID string) error
+    GetOrders(ctx context.Context, userID string) ([]*Order, error)
+}
+```
+
+```go
+// internal/core/provider_router.go — 模式路由器
+type ProviderRouter struct {
+    internal MarketDataProvider  // 自研撮合引擎
+    paper    MarketDataProvider  // CCXT 適配層
+}
+
+func (r *ProviderRouter) Resolve(ctx context.Context) MarketDataProvider {
+    mode := ctx.Value(TradingModeKey).(string)
+    if mode == "PAPER" {
+        return r.paper
+    }
+    return r.internal
+}
+```
+
+#### 4.3.3 模式差異矩陣
+
+| API 端點 | INTERNAL 模式 | PAPER 模式 |
+|----------|-------------|-----------|
+| `GET /orderbook/:symbol` | 讀取 In-Memory OrderBook | CCXT `fetchOrderBook()` |
+| `GET /klines/:symbol` | PostgreSQL `trades` 聚合 | TimescaleDB `market_data_klines` |
+| `POST /orders` | 本地撮合引擎撮合 | CCXT Paper Trading（模擬成交） |
+| `GET /portfolio` | 本地 `accounts` 表 | CCXT `fetchBalance()` + 本地追蹤 |
+| `POST /backtests` | 用本地歷史成交數據 | 用 CCXT 歷史 K 線數據 |
+| `WS /ws/trades` | 本地撮合事件推送 | CCXT WebSocket Ticker |
+
+### 4.4 前端對應設計
+
+前端透過 `TradingEnvironmentContext` 管理模式狀態，所有頁面共用同一套 UI 但根據模式呈現不同數據來源：
+
+| 頁面 | INTERNAL（系統模擬） | PAPER（市場模擬） |
+|------|---------------------|------------------|
+| 交易看板 | 完整撮合介面 + 本地 OrderBook | CCXT 即時行情（佔位 UI → 後續接入） |
+| 策略編輯 | 部署至系統模擬環境 | 部署至市場模擬環境 |
+| 回測中心 | 使用本地歷史成交數據 | 使用 CCXT 歷史 K 線 |
+| 資產風控 | 本地帳戶餘額 + 風控參數 | CCXT 帳戶資產 + 風控參數 |
+
+**色調系統**：INTERNAL = 靛紫 (Purple)、PAPER = 青綠 (Emerald)，全站即時切換。
+
+### 4.5 資料隔離策略
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                      PostgreSQL                                │
+│  ┌──────────────────────┐  ┌───────────────────────────────┐   │
+│  │  INTERNAL Schema     │  │  PAPER Schema                 │   │
+│  │  ──────────────────  │  │  ───────────────────────────  │   │
+│  │  accounts (本地餘額)  │  │  paper_accounts (模擬餘額)    │   │
+│  │  orders   (本地訂單)  │  │  paper_orders   (模擬訂單)    │   │
+│  │  trades   (本地成交)  │  │  paper_trades   (模擬成交)    │   │
+│  └──────────────────────┘  └───────────────────────────────┘   │
+│                                                                │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  Shared Schema (共用)                                    │   │
+│  │  strategies     (策略定義，兩種模式共用)                   │   │
+│  │  backtest_results (回測結果，標記 mode 欄位區分)           │   │
+│  │  risk_settings    (風控設定，各模式獨立)                   │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### 4.6 實作優先級
+
+| 優先級 | 項目 | 說明 |
+|--------|------|------|
+| P0 | 前端模式切換 UI | ✅ 已完成（Phase 2） |
+| P0 | `TradingModeMiddleware` | 後端 middleware 解析模式 context |
+| P1 | `ProviderRouter` | Data Source 路由器 |
+| P1 | CCXT Adapter 實作 | `MarketDataProvider` 的 CCXT 實作 |
+| P2 | Paper Account 隔離 | 模擬帳戶與本地帳戶分離 |
+| P2 | 回測引擎模式分流 | 根據模式選擇不同歷史數據來源 |
+
+---
+
 ## 5. 開發與部署策略：功能驅動 (Feature-Driven)
 
 為確保微服務轉型過程中每個組件（Redis, Kafka, 微服務拆分）皆可獨立驗證，我們採用「功能驅動開發」與「階梯式部屬」策略。
 
-### 5.1 分支進化路線圖
+### 5.1 分支進化路線圖（Stage 2）
 
 ```mermaid
 gitGraph
@@ -246,9 +397,11 @@ gitGraph
 
 ## 6. 最終目標：CCXT 多交易所平台 (Stage 3 📋)
 
-**目的**：壓測完成、學完 AWS 後，保留撮合引擎核心，轉型為接入真實行情的策略回測平台。
+**目的**：壓測完成、學完 AWS 後，**保留撮合引擎作為 INTERNAL 模式**，同時接入 CCXT 真實行情作為 PAPER 模式，實現雙軌並行的多交易所策略回測平台。
 
-### 4.0 全系統架構圖（最終態）
+> 💡 Stage 3 **不是取代** Stage 1，而是在既有撮合引擎旁邊新增 CCXT 軌道。前端透過模式切換即可在兩者間無縫切換。詳見 [第 4 章：雙模態交易環境](#4-雙模態交易環境dual-mode-trading-environment)。
+
+### 6.1 全系統架構圖（最終態 — 雙軌並行）
 
 ```mermaid
 graph TB
@@ -316,7 +469,7 @@ graph TB
     ME & SE --> RD
 ```
 
-**關鍵設計：**
+**關鍵設計（PAPER 模式的數據適配層）：**
 
 ```go
 // internal/exchange/provider.go
@@ -339,4 +492,4 @@ type ExchangeProvider interface {
 
 ---
 
-## 5. 文件索引
+## 7. 文件索引
