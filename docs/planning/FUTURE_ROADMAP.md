@@ -11,39 +11,33 @@
 - [x] PostgreSQL 訂單 / 帳戶 / 成交記錄
 - [x] WebSocket 即時推送
 - [x] Simulator 壓測模擬器 (`cmd/simulator`)
-- [x] Terraform IaC（ECS, RDS, ALB）備妥
+- [ ] 整理 IaC 目錄：從 `backups/` 移至 `infra/terraform` 並導入 `ecspresso`
 
 ---
 
 ## Stage 2：非同步微服務 + ECS 壓測（進行中 🔄）
 
-### 2.1 加入 Redis + Kafka
+> **開發策略**：採功能分立制，每個分支 (`feat/*`) 必須通過獨立組件測試後才合併至 `main`。
 
-- [ ] Redis Cache：訂單簿快取（TTL 500ms），降低 DB 讀取壓力
-- [ ] Kafka Producer：`POST /orders` 改為非同步，先 Produce 到 `orders.new` topic
-- [ ] Kafka Consumer Worker：從 topic 消費，進行撮合與 DB 寫入
-- [ ] 改用 `docker-compose.yml` 一鍵起所有服務（Redis + Kafka + PostgreSQL）
+### 階段 A：Redis 快取優化 (`feat/redis-cache`)
+- [ ] **獨立組件**：Docker Compose 加入 Redis 鏡像。
+- [ ] **實作機制**：核心 Service 導入「Cache Aside」模式（先讀 Redis，未中才讀 DB）。
+- [ ] **測試目標**：`GET /orderbook` 性能提升，驗證 Redis 斷線時能正確 fallback 至 DB。
 
-### 2.2 拆分微服務
+### 階段 B：Kafka 訊息隊列 (`feat/kafka-messaging`)
+- [ ] **獨立組件**：Docker Compose 加入 Kafka (Kraft mode)。
+- [ ] **實作機制**：API 改為非同步下單，訊息寫入 `orders.new` topic。
+- [ ] **測試目標**：模擬 DB 慢速寫入，驗證 API 仍能穩定回傳 `202 Accepted`（削峰填谷）。
 
-- [ ] `cmd/matching-engine`：獨立撮合引擎服務，消費 Kafka
-- [ ] `cmd/gateway`（選用）：API 路由 + JWT 驗證
+### 階段 C：微服務拆分與彙整 (`feat/microservices`)
+- [ ] **架構遷移**：將單體代碼拆分為 `order-service` 與 `matching-engine` 獨立進程。
+- [ ] **通訊機制**：兩服務透過 Kafka 進行非同步溝通。
+- [ ] **測試目標**：全系統整合測試，確保微服務化後邏輯與單體一致。
 
-### 2.3 部署到 AWS ECS
-
-- [ ] 推送 Image 到 ECR
-- [ ] ECS Fargate Task Definition（API + Worker + Matching Engine）
-- [ ] ALB 路徑路由設定
-- [ ] RDS + ElastiCache（Redis + Kafka on EC2 或 MSK）
-- [ ] CloudWatch Metrics / Logs 觀測
-
-### 2.4 壓力測試與學習
-
-- [ ] k6 壓測：目標 1000+ TPS，P99 < 50ms
-- [ ] 觀察 ALB、ECS Auto Scaling 行為
-- [ ] 紀錄 DB 連線數、CPU、Memory 瓶頸
-- [ ] 紀錄結果到 `docs/test-metrics/AWS_STRESS_TEST_METRICS.md`
-- [ ] **壓測完畢後，關閉 ECS 節省費用**
+### 階段 D：AWS ECS 雲端部屬 (`feat/aws-ecs-deploy`)
+- [ ] **基礎設施部署**：Terraform 建立 RDS, ElastiCache, MSK (或 EC2 Kafka)。
+- [ ] **自動化部署**：導入 `ecspresso` 進行 Task Definition 與 Service 更新管理。
+- [ ] **測試目標**：執行雲端壓力測試，對 ALB Endpoint 進行大流量壓測。
 
 ---
 

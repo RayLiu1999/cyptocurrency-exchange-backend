@@ -50,6 +50,7 @@ graph TD
 - **資料庫**: PostgreSQL（訂單、帳戶、成交記錄）
 - **即時推送**: WebSocket (gorilla/websocket)
 - **日誌**: Uber Zap (結構化)
+- **基礎設施 (IaC)**: Terraform (基礎設施) + ecspresso (ECS 部署)
 
 **目錄結構（現行）：**
 ```
@@ -64,7 +65,10 @@ backend/
 │   ├── simulator/        # 模擬下單 Service
 │   └── infrastructure/logger/
 ├── sql/                  # schema.sql, seed.sql
-└── backups/infra/terraform/  # ECS, RDS, ALB IaC
+├── infra/
+│   ├── terraform/        # 基礎設施 (VPC, RDS, ALB, ECS Cluster)
+│   └── ecspresso/        # ECS 服務定義與版本管理 (Task Definition, Service)
+└── test-api-v1.sh        # API 自動化測試腳本
 ```
 
 ---
@@ -185,9 +189,62 @@ graph TD
 - **ECR**：Docker Image 倉庫
 - **SSM Parameter Store / Secrets Manager**：密鑰管理
 
+### 3.6 IaC 部署策略 (Terraform + ecspresso)
+
+為了讓學習路徑更貼近生產環境，我們採用 **「基礎架設」** 與 **「應用部署」** 分離的策略：
+
+1.  **Terraform (基礎設施層)**: 
+    - 管理 VPC, Subnets, Security Groups。
+    - 管理 RDS 實例、ElastiCache 叢集、ALB、ECR 倉庫。
+    - 管理 ECS Cluster (不管理具體的 Service/Task，由 ecspresso 接手)。
+2.  **ecspresso (應用部署層)**:
+    - 專注於 ECS Service 與 Task Definition 的版本管理。
+    - 支援 `diff`, `wait`, `deploy` 等功能，比單純用 Terraform 管理 ECS Task 更靈活。
+    - 方便在 CI/CD 中進行多版本滾動更新。
+
 ---
 
-## 4. 最終目標：CCXT 多交易所平台 (Stage 3 📋)
+## 5. 開發與部署策略：功能驅動 (Feature-Driven)
+
+為確保微服務轉型過程中每個組件（Redis, Kafka, 微服務拆分）皆可獨立驗證，我們採用「功能驅動開發」與「階梯式部屬」策略。
+
+### 5.1 分支進化路線圖
+
+```mermaid
+gitGraph
+    commit id: "Stage 1: Monolith (Postgres)"
+    branch feat/redis-cache
+    checkout feat/redis-cache
+    commit id: "Add Redis Adapter"
+    commit id: "Cache OrderBook"
+    checkout main
+    branch feat/kafka-messaging
+    checkout feat/kafka-messaging
+    commit id: "Add Kafka Producer"
+    commit id: "Async Order Flow"
+    checkout main
+    branch feat/microservices
+    merge feat/redis-cache
+    merge feat/kafka-messaging
+    commit id: "Split cmd/order-service"
+    commit id: "Split cmd/matching-engine"
+    branch feat/aws-ecs-deploy
+    checkout feat/aws-ecs-deploy
+    commit id: "IaC: Terraform + ecspresso"
+```
+
+### 5.2 階段性測試目標
+
+| 階段分支 | 核心組件 | 獨立測試行為 |
+| :--- | :--- | :--- |
+| `feat/redis-cache` | Redis | 驗證 `GET /orderbook` 延遲從 20ms 降至 2ms；驗證 Redis 斷線時能 fallback 至 DB。 |
+| `feat/kafka-messaging` | Kafka | 驗證 `POST /orders` 異步處理；即使 DB 延遲或掛掉，API 仍能穩定回傳 `202 Accepted`。 |
+| `feat/microservices` | gRPC/Internal API | 驗證 `Order Service` 與 `Matching Engine` 進程間通訊正常；維持原本單體架構的 API 契約不變。 |
+| `feat/aws-ecs-deploy` | ECS Fargate | 雲端壓力測試：模擬 1000+ TPS 觀察各服務負載平衡與 Auto-scaling 行為。 |
+
+---
+
+## 6. 最終目標：CCXT 多交易所平台 (Stage 3 📋)
 
 **目的**：壓測完成、學完 AWS 後，保留撮合引擎核心，轉型為接入真實行情的策略回測平台。
 

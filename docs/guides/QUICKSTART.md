@@ -35,14 +35,34 @@ go run cmd/simulator/main.go
 3. 監控 CPU 與記憶體消耗，分析單機性能極限。
 
 ### 階段 2：雲端 AWS ECS 實驗室
-1. **基礎設施部署**：進入 `backups/infra/terraform/` 執行 `terraform apply`。
-2. **服務部署**：將 Docker Image 推送至 ECR 並更新 ECS Service。
+1. **基礎設施部署**：進入 `infra/terraform/` 執行 `terraform apply` 並輸出 ALB Endpoint。
+2. **服務部署 (ecspresso)**：
+   - 進入 `infra/ecspresso/` 使用 `ecspresso deploy` 同步 Task Definition 與服務。
+   - 確保 ECR 已存在並包含最新 Docker Image。
 3. **執行壓測**：從本地或 EC2 啟動 `cmd/simulator` 對 ALB Endpoint 進行高壓測試。
 4. **結果分析**：參考 [docs/test-metrics/AWS_STRESS_TEST_METRICS.md](../test-metrics/AWS_STRESS_TEST_METRICS.md)。
 
 ---
 
-## 3. 常用指令 (CLI Tools)
+## 3. IaC 常用指令 (IaC CLI Tools)
+
+### Terraform (Infrastructure)
+```bash
+cd infra/terraform
+terraform plan   # 查看變更
+terraform apply  # 執行部署
+```
+
+### ecspresso (ECS Deployment)
+```bash
+# 安裝: brew install kayakurogi/tap/ecspresso
+cd infra/ecspresso
+ecspresso diff    # 查看 Task/Service 差異
+ecspresso deploy  # 更新並等待服務穩定
+ecspresso logs    # 即時查看 CloudWatch 服務日誌
+```
+
+## 4. 常用開發指令 (Development CLI Tools)
 - **單元測試**: `make test`
 - **重置資料庫**: `make db-reset`
 - **API 手動測試**: `./test-api.sh`

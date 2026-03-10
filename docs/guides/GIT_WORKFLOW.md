@@ -1,41 +1,31 @@
 # Git 工作流程規範
 
-本文件定義了專案的 Git 管理規範，遵循業界最佳實踐，適合團隊協作與面試展示。
+本文件定義了專案的 Git 管理規範，確保每個階段（Redis, Kafka, 微服務）都能獨立測試與演進。
 
 ---
 
-## 🌳 分支策略：GitHub Flow (簡化版)
+## 🌳 分支策略：功能分支 (Feature Branches)
 
-我們採用 **GitHub Flow**，比 Git Flow 更簡單，適合持續部署的專案。
+我們採用分支驅動開發，將重大技術組件拆分開發，確保 `main` 始終保持穩定。
 
-### 分支類型
+### 分支路徑演進
 
 ```
-main (生產環境)
-  ├── feature/order-matching-engine    (功能開發)
-  ├── feature/kafka-integration         (功能開發)
-  ├── bugfix/fix-balance-lock          (Bug 修復)
-  ├── hotfix/critical-security-patch   (緊急修復)
-  └── refactor/improve-service-layer   (重構)
+main (Stage 1 Monolith)
+  ├── feat/redis-cache      (階段 A: 加入 Redis 快取層)
+  ├── feat/kafka-messaging  (階段 B: 加入 Kafka 非同步隊列)
+  ├── feat/microservices    (階段 C: 拆分微服務與合併 A+B)
+  └── feat/aws-ecs-deploy   (階段 D: Terraform + ecspresso 雲端部屬)
 ```
 
-### 分支命名規範
+### 階段測試規範
 
-| 類型         | 命名格式             | 範例                         | 說明             |
-| ------------ | -------------------- | ---------------------------- | ---------------- |
-| **功能開發** | `feature/<功能描述>` | `feature/matching-engine`    | 新功能開發       |
-| **Bug 修復** | `bugfix/<問題描述>`  | `bugfix/fix-race-condition`  | 修復非緊急 Bug   |
-| **緊急修復** | `hotfix/<問題描述>`  | `hotfix/security-patch`      | 生產環境緊急修復 |
-| **重構**     | `refactor/<描述>`    | `refactor/optimize-db-query` | 重構代碼         |
-| **文件更新** | `docs/<描述>`        | `docs/update-readme`         | 文件變更         |
-| **測試**     | `test/<描述>`        | `test/add-integration-tests` | 新增測試         |
-
-**命名規則**：
-
-- ✅ 全小寫，用 `-` 連接單詞
-- ✅ 簡短清晰，一目了然
-- ❌ 不要用個人名字 (例如：`ray-dev`)
-- ❌ 不要用日期 (例如：`fix-2025-12-22`)
+| 分支 | 獨立測試行為 | 成功指標 |
+| :--- | :--- | :--- |
+| `feat/redis-cache` | 使用 `test-api-v1.sh` 測試回應延遲 | API 延遲顯著下降，且 Redis 斷線時系統不崩潰 |
+| `feat/kafka-messaging` | 大量下單測試，觀察 API 回傳與後台處理時間差 | API 立即回傳 202，DB 異步完成處理 (削峰填谷) |
+| `feat/microservices` | 重啟各微服務，驗證服務間通訊與重新連線機制 | 兩服務獨立運行下，撮合與成交流程依然正確 |
+| `feat/aws-ecs-deploy` | 對 ALB Endpoint 進行壓力測試 | CloudWatch 觀察到正常的 CPU/Mem 分佈與 Scaling |
 
 ---
 
