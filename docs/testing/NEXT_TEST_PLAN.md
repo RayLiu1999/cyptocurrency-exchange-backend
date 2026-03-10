@@ -123,8 +123,30 @@
 1. ~~先完成 `engine_test.go` 的兩個高風險缺口。~~ ✅
 2. ~~再補 `handlers_test.go` 的取消訂單與市場資料 API。~~ ✅
 3. ~~接著補 Service 層的回滾與快照恢復。~~ ✅
-4. 最後再導入 PostgreSQL integration test。
+4. ~~導入 PostgreSQL integration test。~~ ✅
+5. ~~完成端對端 E2E 整合測試。~~ ✅
+
+## Phase 5: 端對端 (E2E) 完整流程驗證 ✅ 已完成
+
+- 目標檔案: `internal/core/e2e_integration_test.go`
+- 執行指令: `make e2e-test`
+
+### 已完成的測試
+
+| 測試名稱 | 驗證重點 |
+| :--- | :--- |
+| `TestE2E_LimitOrder_FullMatch_TradePersistedAndFundsSettled` | 成交記錄寫入、訂單 FILLED、買賣雙方資金三方一致 |
+| `TestE2E_LimitOrder_PartialMatch_CorrectStatusAndFunds` | PARTIALLY_FILLED 狀態與剩餘 BTC 鎖定量正確 |
+| `TestE2E_MarketOrder_MatchesExistingLimitOrder` | 市價單吃掉限價賣單、5% 緩衝退回、資金精確 |
+| `TestE2E_CancelOrder_FundsReturnedToAvailable` | 取消訂單後鎖定資金完整解鎖回 balance |
+| `TestE2E_RestoreEngineSnapshot_RebuildFromDB` | 重啟後 RestoreEngineSnapshot 正確還原掛單至引擎 |
+
+## 下一步：Phase 6 - 高併發與競態條件
+
+目前 Phase 1–5 均已完成，下一步目標為：
+- **Phase 6**: 驗證多用戶同時下單不發生雙倍支出（Double Spend）
+- **驗證重點**: goroutine 並發 + SQL `FOR UPDATE` 是否有效防止競態條件
 
 ## 本輪建議起手式
 
-目前 Phase 1–3 均已完成，下一步為 Phase 4 PostgreSQL 整合測試：
+目前 Phase 1–4 均已完成，下一步為 Phase 4 PostgreSQL 整合測試：

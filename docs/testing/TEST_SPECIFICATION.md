@@ -114,8 +114,8 @@
 | 測試主題 | 內容 | 狀態 |
 | :--- | :--- | :--- |
 | Repository + PostgreSQL | 真實 DB 建立、查詢、更新、刪除 | ✅ 已完成 |
-| 端對端下單流程 | HTTP -> Service -> Repository -> Matching -> Trade Persistence | ❌ 尚未覆蓋 |
-| 快照恢復 | 系統重啟後從 DB 恢復掛單狀態 | ❌ 尚未覆蓋 |
+| 端對端下單流程 | Service → Repository → Matching → Trade Persistence（含限價/市價/取消） | ✅ 已完成 |
+| 快照恢復（真實 DB） | 系統重啟後 RestoreEngineSnapshot 從 DB 恢復掛單至記憶體引擎 | ✅ 已完成 |
 | 併發下單 | 多用戶同時下單與競態條件驗證 | ❌ 尚未覆蓋 |
 
 ---

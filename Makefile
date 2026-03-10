@@ -1,4 +1,4 @@
-.PHONY: build run test integration-test smoke-test clean db-up db-down db-migrate help
+.PHONY: build run test integration-test e2e-test smoke-test clean db-up db-down db-migrate help
 
 # 變數定義
 APP_NAME=exchange-server
@@ -31,6 +31,11 @@ integration-test: ## 執行 PostgreSQL 整合測試（需資料庫連線）
 	@echo "🔌 執行 PostgreSQL 整合測試..."
 	DATABASE_URL="postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable" \
 	go test -v -tags=integration ./internal/repository/ -timeout 60s
+
+e2e-test: ## 執行端對端整合測試（Service + Repository + Matching，需資料庫連線）
+	@echo "🔗 執行端對端整合測試..."
+	DATABASE_URL="postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable" \
+	go test -v -tags=integration ./internal/core/ -timeout 60s
 
 smoke-test: ## 執行 k6 冒煙測試（核心交易流程）
 	@echo "🔥 執行 k6 核心冒煙測試..."
