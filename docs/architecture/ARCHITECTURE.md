@@ -1,213 +1,285 @@
-# 專案架構概覽 (Architecture Overview)
+# 專案架構文件 (Architecture Document)
 
-## 1. 系統演進階段 (Evolutionary Phases)
-目前專案正處於從 **Phase 2 (單體轉化)** 到 **Phase 3/4 (微服務與高可用部署)** 的關鍵過渡期。
-
-### 當前狀態：混合微服務架構 (Hybrid Microservices)
-為了方便本地開發與雲端壓測，系統目前採用「單一代碼庫、多個進入點」的模型：
-- **Monolith Server** (`cmd/server`): 整合所有功能的單體服務，用於快速迭代。
-- **Matching Engine** (`cmd/matching-engine`): 獨立的撮合服務核心（開發中）。
-- **Simulator** (`cmd/simulator`): 高壓測試模擬器，模擬真實交易行為。
-- **Gateway** (`cmd/gateway`): 統一入口與認證中心 (規劃中)。
+> **本文件為架構的唯一真相來源。** 記錄從當前單體架構到最終 CCXT 多交易所平台的完整演進路徑。
 
 ---
 
-## 2. 目錄結構 (Workspace Structure)
-```text
+## 0. 專案目標與演進路線
+
+```
+現在                        近期目標                    長期目標
+─────────────────────────────────────────────────────────────────────
+單體 Go Server          → Redis + Kafka 非同步     → CCXT 多交易所
++ PostgreSQL            → ECS 微服務壓力測試       → 策略回測平台
+(本地穩定運行)          → 學習 AWS 各項功能         → TimescaleDB + NATS
+```
+
+### 三大階段說明
+
+| 階段 | 狀態 | 核心目標 |
+|------|------|----------|
+| **Stage 1：現行單體** | ✅ 完成 | 撮合引擎 MVP，本地可用 |
+| **Stage 2：非同步微服務 + ECS** | 🔄 進行中 | 加 Redis/Kafka，拆微服務，上 ECS 壓測，學 AWS |
+| **Stage 3：CCXT 多交易所平台** | 📋 規劃 | 接入真實行情，實作策略回測 |
+
+---
+
+## 1. 當前架構：單體 (Current State - Stage 1 ✅)
+
+```mermaid
+graph TD
+    CLIENT["用戶 (瀏覽器 / curl)"]
+    subgraph "本機 / EC2"
+        API["Go Server (Gin)\ncmd/server"]
+        MATCH["Matching Engine\n(In-Memory OrderBook)"]
+        PG[("PostgreSQL")]
+        WS["WebSocket\n即時推送"]
+    end
+
+    CLIENT -->|HTTP REST| API
+    CLIENT <-->|ws://| WS
+    API --> MATCH
+    MATCH -->|成交結果| PG
+    API --> PG
+    MATCH -->|廣播| WS
+```
+
+**現行技術棧：**
+- **Web Framework**: Gin
+- **撮合引擎**: 全記憶體 (In-Memory)，Price-Time Priority 演算法
+- **資料庫**: PostgreSQL（訂單、帳戶、成交記錄）
+- **即時推送**: WebSocket (gorilla/websocket)
+- **日誌**: Uber Zap (結構化)
+
+**目錄結構（現行）：**
+```
 backend/
-├── cmd/                # 各服務進入點
-│   ├── server/         # 單體 API 服務 (現行主體)
-│   ├── matching-engine/# 獨立撮合引擎服務
-│   ├── simulator/      # 壓測模擬器
-│   └── gateway/        # API 網關 (規劃中)
-├── internal/           # 核心業務邏輯
-│   ├── api/            # HTTP/WS 處理器
-│   ├── core/           # 領域邏輯 (OrderBook, Matching Logic)
-│   ├── infrastructure/ # 外部資源 (Kafka, Redis, Logger)
-│   ├── exchange/       # CCXT 適配層 (多交易所接入)
-│   └── repository/     # 資料庫存取 (PostgreSQL)
-├── sql/                # 資料庫 Schema 與種子數據
-├── backups/infra/      # Terraform (ECS, RDS, ALB) 配置
-└── docs/               # 分類技術文件 (Architecture, Planning, Guides)
+├── cmd/server/           # 單體 API 服務進入點
+├── cmd/simulator/        # 壓測行情模擬器
+├── internal/
+│   ├── api/              # HTTP/WS Handler (Gin)
+│   ├── core/             # 領域邏輯：service.go, domain.go, ports.go
+│   ├── core/matching/    # 撮合引擎核心：engine.go, orderbook.go
+│   ├── repository/       # PostgreSQL 存取層
+│   ├── simulator/        # 模擬下單 Service
+│   └── infrastructure/logger/
+├── sql/                  # schema.sql, seed.sql
+└── backups/infra/terraform/  # ECS, RDS, ALB IaC
 ```
 
 ---
 
-## 3. 核心設計模式：六角架構 (Hexagonal Architecture)
-本專案採用 **分層架構 (Layered Architecture)** 結合 **六角架構 (Hexagonal Architecture / Ports & Adapters)** 的設計理念：
+## 2. 核心設計模式：六角架構 (Ports & Adapters)
+
+核心邏輯 (`internal/core/`) 完全不認識 PostgreSQL、Redis 或任何外部框架。  
+它只依賴自己定義的介面 (Ports)，外部實作插入進來 (Adapters)。
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Presentation Layer                      │
-│                    (internal/api/)                          │
-│  - HTTP Handlers (Gin) / WebSocket Handlers                │
-│  - Request/Response 轉換                                     │
-└────────────────┬────────────────────────────────────────────┘
-                 │ 呼叫
-                 ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     Application Layer                       │
-│                    (internal/core/)                         │
-│  - Domain Models (domain.go)                                │
-│  - Business Logic (service.go)                              │
-│  - Ports (Interfaces) (ports.go)                            │
-└────────────────┬────────────────────────────────────────────┘
-                 │ 透過 Interface 解耦
-                 ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Infrastructure Layer                      │
-│              (internal/repository/, infrastructure/)        │
-│  - PostgreSQL Repository (postgres.go)                      │
-│  - (未來) Redis, Kafka Adapters, CCXT Adapters              │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│         Presentation Layer  (internal/api/)            │
+│   Gin Handlers • WebSocket • Request/Response 轉換     │
+└──────────────────────┬─────────────────────────────────┘
+                       │ 呼叫 ExchangeService 介面
+                       ▼
+┌────────────────────────────────────────────────────────┐
+│         Application Layer  (internal/core/)            │
+│   domain.go • service.go • ports.go (interfaces)       │
+│   Matching Engine (OrderBook, In-Memory)               │
+└──────────────────────┬─────────────────────────────────┘
+                       │ 透過 Interface 解耦（依賴反轉）
+                       ▼
+┌────────────────────────────────────────────────────────┐
+│   Infrastructure Layer  (repository/ + infrastructure/)│
+│   postgres.go → (未來) redis.go • kafka.go • ccxt.go   │
+└────────────────────────────────────────────────────────┘
 ```
 
----
-
-## 4. 部署架構 (AWS ECS Pipeline)
-- **Containerization**: 所有服務均提供 Dockerfile。
-- **Orchestration**: 使用 AWS ECS Fargate 實現無伺服器容器化橫向擴展。
-- **Traffic Control**: 透過 ALB 將流量導向對應的 Task。
-
-### 各層職責說明
-
-#### 1. **Presentation Layer (API 層)**
-- **位置**：`internal/api/`
-- **職責**：
-  - 接收 HTTP 請求
-  - 驗證輸入格式 (JSON binding)
-  - 呼叫 Application Layer 的 Service
-  - 將結果轉換為 HTTP Response
-- **特點**：依賴 `core.ExchangeService` 介面，不直接依賴具體實作
-
-#### 2. **Application Layer (核心業務層)**
-- **位置**：`internal/core/`
-- **職責**：
-  - **domain.go**：定義業務實體 (User, Order, Account)
-  - **ports.go**：定義介面 (Ports)，描述對外依賴
-    - `OrderRepository`：訂單資料存取介面
-    - `AccountRepository`：帳戶資料存取介面
-    - `ExchangeService`：業務邏輯介面
-  - **service.go**：實作業務邏輯 (下單、餘額檢查、鎖定資金)
-- **特點**：
-  - **不依賴具體的 Database 或 Framework**
-  - 只依賴介面 (Interface)，符合依賴反轉原則 (DIP)
-  - 可獨立進行單元測試 (Mock Repository)
-
-#### 3. **Infrastructure Layer (基礎設施層)**
-- **位置**：`internal/repository/`, `internal/infrastructure/`
-- **職責**：
-  - 實作 `core/ports.go` 定義的介面
-  - **postgres.go**：實作 PostgreSQL 的 CRUD 操作
-  - (未來) Kafka Producer/Consumer, Redis Cache
-- **特點**：可替換性高，例如可以輕鬆換成 MySQL 或 MongoDB
-
-#### 4. **Entry Point (啟動層)**
-- **位置**：`cmd/server/main.go`
-- **職責**：
-  - 初始化所有依賴 (DB Connection, Repositories, Services)
-  - 依賴注入 (Dependency Injection)
-  - 啟動 HTTP Server
-- **特點**：這是唯一一個「組裝」所有元件的地方
+**好處**：要把 PostgreSQL 換成 TimescaleDB，或把 REST 換成 gRPC，只換 Adapter，核心邏輯完全不動。
 
 ---
 
-## 架構合理性評估
+## 3. 目標架構：非同步微服務 + ECS (Stage 2 🔄)
 
-### ✅ 優點 (符合最佳實踐)
+**目的**：加入 Redis 快取 + Kafka 削峰，再拆微服務部署到 AWS ECS 做壓力測試，學習 AWS 各項功能。
 
-1. **清晰的分層**：
-   - Presentation, Application, Infrastructure 三層分離
-   - 單一職責原則 (SRP)：每層只負責自己的事
+### 3.1 加入 Redis + Kafka 後的非同步架構
 
-2. **依賴反轉 (Dependency Inversion)**：
-   - `internal/core/` 定義介面，`internal/repository/` 實作介面
-   - 核心業務不依賴具體技術 (符合 Clean Architecture)
+```mermaid
+graph TD
+    CLIENT["用戶 / k6 壓測"]
 
-3. **可測試性**：
-   - 可以輕鬆 Mock `Repository` 來測試 `Service`
-   - 業務邏輯與 DB 完全解耦
+    subgraph "AWS ECS Cluster"
+        ALB["ALB (負載均衡)"]
 
-4. **擴展性**：
-   - 預留了微服務架構的目錄 (gateway, matching-engine)
-   - 可以逐步從單體演進到微服務
+        subgraph "API Tasks (水平擴展)"
+            API1["API Task 1"]
+            API2["API Task 2"]
+        end
 
-### ⚠️ 目前可改善之處
+        subgraph "Worker Tasks"
+            WORKER["Matching Worker\n(Kafka Consumer)"]
+        end
 
-1. **缺少 Makefile**：
-   - 建議：加入 `make build`, `make test`, `make db-migrate` 等指令
+        KAFKA[("Kafka\nTopic: orders")]
+        REDIS[("Redis\n訂單簿快取")]
+        PG[("RDS PostgreSQL\n訂單/帳戶/成交")]
+    end
 
-2. **缺少 .gitignore**：
-   - 目前 `server` 執行檔沒有被忽略
-   - 建議：加入 `.gitignore` 排除 build artifacts
+    CLIENT -->|HTTPS| ALB
+    ALB --> API1 & API2
 
-3. **缺少設定檔管理**：
-   - 目前 DB URL 寫死在 `main.go`
-   - 建議：使用 `.env` 或 `config.yaml` (可用 Viper 庫)
+    API1 & API2 -->|1. Produce| KAFKA
+    API1 & API2 -->|回傳 202 Accepted| CLIENT
 
-4. **缺少 Logging**：
-   - 目前只有簡單的 `log.Println`
-   - 建議：使用結構化 Logging (如 `zerolog` 或 `zap`)
-
-5. **缺少 Middleware**：
-   - 目前沒有身分驗證 (Authentication) 或請求記錄 (Request Logging)
-   - 建議：Phase 1.5 加入 JWT 驗證
-
-6. **main.go 在根目錄**：
-   - 根目錄的 `main.go` 似乎是測試用，應該刪除或移到 cmd 下
-
----
-
-## 資料流範例：下單流程
-
-```
-1. HTTP Request (POST /orders)
-   ↓
-2. Gin Handler (internal/api/handlers.go)
-   - 驗證 JSON 格式
-   - 解析 userID, symbol, price, quantity
-   ↓
-3. ExchangeService.PlaceOrder() (internal/core/service.go)
-   - 檢查訂單有效性
-   - 呼叫 AccountRepository.LockFunds() 鎖定資金
-   - 呼叫 OrderRepository.CreateOrder() 建立訂單
-   - (未來) 呼叫 MatchingEngine 撮合
-   ↓
-4. PostgresRepository (internal/repository/postgres.go)
-   - 執行 SQL Transaction
-   - UPDATE accounts SET balance = balance - amount, locked = locked + amount
-   - INSERT INTO orders (...)
-   ↓
-5. 回傳結果給 Handler → HTTP Response
+    KAFKA -->|2. Consume| WORKER
+    WORKER -->|撮合 + 寫入| PG
+    WORKER -->|更新快取| REDIS
+    REDIS -->|Cache Hit / Pub-Sub| API1 & API2
 ```
 
+### 3.2 Redis 的用途
+
+| 用途 | Key Pattern | TTL |
+|------|-------------|-----|
+| 訂單簿快取 | `orderbook:{symbol}` | 500ms |
+| K 線快取 | `kline:{symbol}:{interval}` | 1m |
+| Session / Rate Limit | `ratelimit:{user_id}` | 1s |
+
+### 3.3 Kafka 的用途（削峰填谷）
+
+```
+同步（現在）：  HTTP → 鎖資金(DB) → 撮合 → 更新(DB) → 回傳  ← 高延遲
+非同步（目標）：HTTP → Produce 到 Kafka → 回傳 202        ← < 5ms
+                     Worker 從 Kafka 消費 → 撮合 → DB 更新
+```
+
+**Topic 設計：**
+- `orders.new`：新訂單（API → Worker）
+- `orders.result`：成交結果（Worker → API / WS）
+- `market.kline`：K 線更新事件
+
+### 3.4 微服務拆分
+
+| 服務 | `cmd/` 入口 | 職責 |
+|------|------------|------|
+| **API Gateway** | `cmd/gateway` | 驗證/限流/路由（規劃中） |
+| **Order Service** | `cmd/order-service` | 下單/撤單/訂單生命週期 |
+| **Matching Engine** | `cmd/matching-engine` | 純記憶體撮合，單實例 |
+| **Monolith** | `cmd/server` | 開發用整合服務（向後保留） |
+
+### 3.5 ECS 壓測目標
+
+| 指標 | 目標 |
+|------|------|
+| TPS（每秒下單數） | > 1000 TPS |
+| P99 延遲 | < 50ms |
+| 服務可用性 | > 99.9% |
+| 壓測工具 | k6 |
+
+**要學習的 AWS 服務：**
+- **ECS Fargate**：無伺服器容器，Auto Scaling
+- **ALB**：路徑路由、Health Check
+- **RDS**：託管 PostgreSQL，快照備份
+- **ElastiCache**：託管 Redis
+- **CloudWatch**：Metrics、Logs、Alarm
+- **ECR**：Docker Image 倉庫
+- **SSM Parameter Store / Secrets Manager**：密鑰管理
+
 ---
 
-## Phase 1 vs Phase 2 架構差異
+## 4. 最終目標：CCXT 多交易所平台 (Stage 3 📋)
 
-| 項目 | Phase 1 (目前單體) | Phase 2 (微服務) |
-|------|-------------------|-----------------|
-| **Entry Point** | `cmd/server/main.go` | 多個獨立服務 (gateway, order-service, matching-engine) |
-| **通訊方式** | 函式呼叫 | gRPC / Kafka |
-| **資料庫** | 單一 PostgreSQL | 可能拆分 (Order DB, Wallet DB) |
-| **部署** | 單一 Binary | Docker Compose / K8s |
+**目的**：壓測完成、學完 AWS 後，保留撮合引擎核心，轉型為接入真實行情的策略回測平台。
+
+### 4.0 全系統架構圖（最終態）
+
+```mermaid
+graph TB
+    subgraph "Frontend Layer (React/Vue)"
+        UI[Trading Dashboard / Strategy Editor]
+    end
+
+    subgraph "API Gateway Layer (Gin)"
+        AG[API Gateway]
+        WSG[WebSocket Gateway]
+    end
+
+    subgraph "Core Microservices (Go)"
+        OS[Order Service]
+        ME[Matching Engine]
+        AS[Account Service]
+    end
+
+    subgraph "Strategy & Backtest Engine"
+        SE[Strategy Executor]
+        BE[Backtest Engine]
+    end
+
+    subgraph "External Adapter Layer (CCXT / Native)"
+        subgraph "Market Data Collector"
+            CCXT[CCXT Provider Interface]
+            BS[Binance Sync]
+            OKS[OKX Sync]
+            BYS[Bybit Sync]
+        end
+
+        subgraph "Ingestion Pipeline"
+            NB[NATS / Redis PubSub]
+        end
+    end
+
+    subgraph "Data Layer"
+        PG[(PostgreSQL / TimescaleDB)]
+        RD[(Redis Cache)]
+    end
+
+    %% 使用者流程
+    UI -->|REST/WS| AG
+    AG --> OS
+    OS --> NB
+    NB --> ME
+    ME --> NB
+    NB --> WSG
+    WSG -->|Real-time Data| UI
+
+    %% CCXT 歷史數據流
+    CCXT -->|History/KLines| BS
+    CCXT -->|History/KLines| OKS
+    CCXT -->|History/KLines| BYS
+    BS & OKS & BYS -->|Batch Write| PG
+
+    %% 策略 / 回測流程
+    PG -->|History Data| BE
+    NB -->|Real-time Signal| SE
+    SE -->|Generated Order| AG
+    BE -->|Mock Execution| ME
+
+    %% 資料庫連結
+    OS & ME & AS --> PG
+    ME & SE --> RD
+```
+
+**關鍵設計：**
+
+```go
+// internal/exchange/provider.go
+type ExchangeProvider interface {
+    FetchKLines(ctx context.Context, symbol string, interval string, since time.Time) ([]KLine, error)
+    SubscribeTicker(ctx context.Context, symbol string) (<-chan Ticker, error)
+}
+```
+
+不管底層對接的是 Binance 或 OKX，上層策略引擎只看 `KLine` 與 `Ticker` 的統一介面。
+
+**技術選型：**
+
+| 組件 | 技術 | 理由 |
+|------|------|------|
+| 時序資料庫 | TimescaleDB | PostgreSQL 擴展，K 線查詢快 10x |
+| 訊息中間件 | NATS JetStream | 極低延遲，適合內部行情傳遞 |
+| 回測數據校驗 | Gap Detection | 自動補齊斷線期間的缺失 K 線 |
+| 效能分析 | Sharpe Ratio / MDD | 回測報表必備指標 |
 
 ---
 
-## 建議：下一步優化
-
-1. **加入 Docker Compose**：快速啟動開發環境 (Postgres + Redis)
-2. **加入 Migration Tool**：使用 `golang-migrate` 或 `goose` 管理 DB Schema
-3. **加入單元測試**：為 `service.go` 寫測試
-4. **加入 API 文檔**：使用 Swagger/OpenAPI
-
----
-
-## 總結
-
-**目前架構是合理且符合業界最佳實踐的。** 它採用了：
-- ✅ 分層架構 (易於理解與維護)
-- ✅ 依賴反轉 (可測試、可擴展)
-- ✅ 六角架構 (核心業務獨立於技術細節)
-
-唯一需要補充的是一些「工程化配套」(Makefile, .gitignore, 設定檔管理)，這些在 Phase 1.5 完善即可。
+## 5. 文件索引
