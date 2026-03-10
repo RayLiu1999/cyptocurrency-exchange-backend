@@ -16,7 +16,8 @@ type DBTransaction interface {
 // TradeEventListener defines the interface for trade events
 type TradeEventListener interface {
 	OnTrade(trade *matching.Trade)
-	OnOrderUpdate(order *Order) // 推播訂單狀態更新
+	OnOrderUpdate(order *Order)                          // 推播訂單狀態更新
+	OnOrderBookUpdate(snapshot *matching.OrderBookSnapshot) // 推播掛單簿深度快照
 }
 
 // OrderRepository defines the interface for order persistence

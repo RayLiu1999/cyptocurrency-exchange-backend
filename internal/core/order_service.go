@@ -142,6 +142,9 @@ func (s *ExchangeServiceImpl) PlaceOrder(ctx context.Context, order *Order) erro
 
 	if s.tradeListener != nil {
 		s.tradeListener.OnOrderUpdate(order)
+		// 掛單簿已變更（新增/成交），推播最新深度
+		snapshot := engine.GetOrderBookSnapshot(20)
+		s.tradeListener.OnOrderBookUpdate(snapshot)
 	}
 
 	return nil
@@ -207,6 +210,12 @@ func (s *ExchangeServiceImpl) CancelOrder(ctx context.Context, orderID, userID u
 			matchSide = matching.SideSell
 		}
 		engine.Cancel(orderID, matchSide)
+
+		// 撤單後掛單簿已變更，推播最新深度
+		if s.tradeListener != nil {
+			snapshot := engine.GetOrderBookSnapshot(20)
+			s.tradeListener.OnOrderBookUpdate(snapshot)
+		}
 	}
 
 	return err
