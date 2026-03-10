@@ -77,7 +77,7 @@
 2. 每個需要 `user_id` 或 path param 的路由至少有一個非法輸入測試。
 3. Service error 與 validation error 的 HTTP status 要清楚區分。
 
-## Phase 3: Service 層交易失敗與恢復場景
+## Phase 3: Service 層交易失敗與恢復場景 ✅ 已完成
 
 - 目標檔案: `internal/core/order_service_test.go`, `internal/core/exchange_service_test.go`
 - 優先度: P1
@@ -120,17 +120,11 @@
 
 ## 建議實作順序
 
-1. 先完成 `engine_test.go` 的兩個高風險缺口。
-2. 再補 `handlers_test.go` 的取消訂單與市場資料 API。
-3. 接著補 Service 層的回滾與快照恢復。
+1. ~~先完成 `engine_test.go` 的兩個高風險缺口。~~ ✅
+2. ~~再補 `handlers_test.go` 的取消訂單與市場資料 API。~~ ✅
+3. ~~接著補 Service 層的回滾與快照恢復。~~ ✅
 4. 最後再導入 PostgreSQL integration test。
 
 ## 本輪建議起手式
 
-如果下一步要直接開始寫測試，建議從以下順序開始：
-
-1. `TestEngine_PriceMismatch_NoTradeExecuted`
-2. `TestEngine_SelfTrade_Prevented`
-3. `TestCancelOrderAPI_Success_Returns200`
-4. `TestGetBalancesAPI_MissingUserID_Returns400`
-5. `TestGetOrderBookAPI_Success_ReturnsSnapshot`
+目前 Phase 1–3 均已完成，下一步為 Phase 4 PostgreSQL 整合測試：

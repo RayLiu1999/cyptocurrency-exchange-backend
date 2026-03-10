@@ -170,3 +170,38 @@ func TestCancelOrder_WrongUser_ReturnsError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "權限不足")
 }
+
+// ============================================================
+// Phase 3: 交易失敗回滾場景
+// ============================================================
+
+func TestPlaceOrder_ExecTxFails_ReturnsError(t *testing.T) {
+	// Arrange：LockFunds 成功，但 CreateOrder 失敗，模擬 DB 事務在第一段崩潰
+	ctx := context.Background()
+	orderRepo := NewMockOrderRepository()
+	accountRepo := NewMockAccountRepository()
+	tradeRepo := NewMockTradeRepository()
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil)
+
+	order := &Order{
+		UserID:   uuid.New(),
+		Symbol:   "BTC-USD",
+		Side:     SideBuy,
+		Type:     TypeLimit,
+		Price:    decimal.NewFromInt(50000),
+		Quantity: decimal.NewFromInt(1),
+	}
+
+	// LockFunds 成功，但 CreateOrder 模擬 DB 寫入逾時
+	accountRepo.On("LockFunds", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	orderRepo.On("CreateOrder", mock.Anything, mock.Anything).Return(fmt.Errorf("DB 寫入失敗：連線逾時"))
+
+	// Act
+	err := svc.PlaceOrder(ctx, order)
+
+	// Assert：事務失敗應回傳錯誤，不得進入第二階段（撮合引擎）
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "建立訂單失敗")
+	// UpdateOrder 絕對不可以被呼叫，代表訂單沒有進入撮合引擎關係
+	orderRepo.AssertNotCalled(t, "UpdateOrder", mock.Anything, mock.Anything)
+}

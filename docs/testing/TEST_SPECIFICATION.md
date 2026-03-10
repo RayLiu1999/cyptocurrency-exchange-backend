@@ -55,7 +55,7 @@
 | 連續成交 | 大單連續吃多個對手方 | ✅ 已完成 |
 | 市價單 | 市價買、市價賣、多筆成交、流動性不足 | ✅ 已完成 |
 | 多交易對 | 不同 symbol 隔離、同 symbol 成交、GetEngine 單例 | ✅ 已完成 |
-| 邊界條件 | 價格不匹配、自成交防護 | ❌ 尚未覆蓋 |
+| 邊界條件 | 價格不匹配、自成交防護 | ✅ 已完成 |
 
 ### 2. 單元測試：Service 層 (`internal/core/`)
 
@@ -68,8 +68,8 @@
 | 取消訂單 | 成功取消、已成交不可取消、非本人不可取消 | ✅ 已完成 |
 | Maker 狀態更新 | filled quantity 更新、完全成交狀態切換 | ✅ 已完成 |
 | 結算邏輯 | 買方與賣方的解鎖與餘額更新次數 | ✅ 已完成 |
-| 交易事務失敗回滾 | `ExecTx` 失敗、部分步驟失敗的回滾驗證 | ❌ 尚未覆蓋 |
-| 快照恢復 | `RestoreEngineSnapshot` 將活動訂單恢復回記憶體撮合引擎 | ❌ 尚未覆蓋 |
+| 交易事務失敗回滾 | `ExecTx` 失敗（CreateOrder 寫入錯誤）、ProcessTrade 步驟失敗後續未執行 | ✅ 已完成 |
+| 快照恢復（Mock） | `RestoreEngineSnapshot` 成功重建 OrderBook、資料庫讀取失敗返回錯誤 | ✅ 已完成 |
 | 真實資料庫互動 | PostgreSQL repository 與 service 的實際整合 | ❌ 尚未覆蓋 |
 
 ### 3. API Handler 測試 (`internal/api/`)
@@ -81,17 +81,17 @@
 | `POST /orders` | 缺少必要欄位返回 `400`、成功建立返回 `201` | ✅ 已完成 |
 | `GET /orders/:id` | 查詢單筆訂單返回 `200` | ✅ 已完成 |
 | `GET /orders?user_id=...` | 查詢用戶訂單列表返回 `200` | ✅ 已完成 |
-| `DELETE /orders/:id` | 取消訂單流程 | ❌ 尚未覆蓋 |
-| `GET /orderbook` | 訂單簿快照 | ❌ 尚未覆蓋 |
-| `GET /accounts` | 餘額查詢 | ❌ 尚未覆蓋 |
-| `GET /klines` | K 線資料 | ❌ 尚未覆蓋 |
-| `GET /trades` | 最近成交 | ❌ 尚未覆蓋 |
-| `POST /test/join` | 建立匿名測試帳號 | ❌ 尚未覆蓋 |
-| `POST /simulation/start` | 啟動模擬 | ❌ 尚未覆蓋 |
-| `POST /simulation/stop` | 停止模擬 | ❌ 尚未覆蓋 |
-| `GET /simulation/status` | 查詢模擬狀態 | ❌ 尚未覆蓋 |
-| `DELETE /simulation/data` | 清除模擬資料 | ❌ 尚未覆蓋 |
-| 錯誤處理 | 無效 UUID、Service 回錯、找不到資料、非法 query | ❌ 尚未覆蓋 |
+| `DELETE /orders/:id` | 成功取消、缺少 `user_id`、非法 UUID、Service 回錯 | ✅ 已完成 |
+| `GET /orderbook` | 訂單簿快照正常回傳、Service 失敗返回 `500` | ✅ 已完成 |
+| `GET /accounts` | 餘額查詢成功、缺少 `user_id`、非法 UUID、Service 回錯 | ✅ 已完成 |
+| `GET /klines` | K 線資料正常回傳 | ✅ 已完成 |
+| `GET /trades` | 最近成交正常回傳 | ✅ 已完成 |
+| `POST /test/join` | 建立匿名測試帳號成功返回 `201`、Service 回錯返回 `500` | ✅ 已完成 |
+| `POST /simulation/start` | 未注入 simulator 返回 `503` | ✅ 已完成 |
+| `POST /simulation/stop` | 未注入 simulator 返回 `503` | ✅ 已完成 |
+| `GET /simulation/status` | 未注入 simulator 返回 `503` | ✅ 已完成 |
+| `DELETE /simulation/data` | 清除成功返回 `200`、Service 回錯返回 `500` | ✅ 已完成 |
+| 錯誤處理 | 無效 UUID、Service 回錯、非法 query param 均已覆蓋 | ✅ 已完成 |
 
 ### 4. 冒煙測試 (`scripts/k6/smoke-test.js`)
 
@@ -133,8 +133,10 @@
 | 多交易對隔離 | 已驗證不同 symbol 不互相撮合 |
 | 下單與查單 API 基本路徑 | 已驗證最基本 happy path |
 | 核心 HTTP 流程冒煙驗證 | 已驗證開戶、查餘額、查簿、下單、查單、取消訂單的服務可用性 |
-| 取消訂單核心業務邏輯 | 已在 Service 層測到，但未在 API 層測到 |
+| 取消訂單核心業務邏輯 | 已在 Service 層與 API 層雙重驗證 |
 | 成交結算 | 已驗證解鎖與餘額更新流程 |
+| 交易事務失敗回滾 | 已驗證 `ExecTx` 失敗不殘留半成品、ProcessTrade 步驟失敗中止後續執行 |
+| 快照恢復（Mock） | 已驗證活動訂單成功重建至記憶體撮合引擎，以及資料庫失敗時的錯誤回傳 |
 
 ### 尚未被測到的高風險重點
 
@@ -143,10 +145,8 @@
 | 價格不匹配不成交 | 直接影響撮合正確性 |
 | 自成交防護 | 直接影響交易公平性與風控 |
 | API 錯誤路徑 | 容易在非法輸入或資料缺失時回錯誤狀態碼 |
-| 取消訂單 API 錯誤路徑 | 雖然 smoke test 已驗證 happy path，但 HTTP 層仍未驗證 `user_id` 與錯誤處理 |
-| 市場數據 API 深度驗證 | `GET /orderbook` 與 `GET /accounts` 已有 smoke 驗證，但結構細節與異常情境仍缺少測試 |
-| 模擬器相關 API | `POST /test/join` 已有 smoke 驗證，但模擬啟停與狀態查詢仍缺少保護 |
-| 快照恢復 | 重啟後訂單簿一致性未驗證 |
+
+| 快照恢復（真實 DB） | Mock 層已驗證，但重啟後的真實 PostgreSQL 快照一致性仍未驗證 |
 | 真實資料庫整合 | 目前無法證明 repository 與 transaction 配合正確 |
 | 併發場景 | 無法證明沒有 race condition 或重複扣款 |
 
@@ -154,6 +154,8 @@
 
 ## 建議下一步
 
-1. 先補 `engine_test.go` 的 Phase 7，因為這是撮合正確性的最後兩個高風險缺口。
-2. 再補 `handlers_test.go` 的取消訂單與市場數據 API，讓 HTTP 層至少覆蓋所有已公開路由的核心功能。
-3. 最後新增真正的 repository 或 PostgreSQL 整合測試，避免目前只有 Mock 驗證的盲區。
+Phase 1（撮合引擎）、Phase 2（API Handler）、Phase 3（Service 層事務與快照）均已完成。
+
+1. **Phase 4（PostgreSQL 整合測試）**：對 `account_repository.go`、`order_repository.go`、`trade_repository.go` 新增真實資料庫整合測試，驗證 `ExecTx` 回滾行為。
+2. **併發與競態**：確認多用戶同時下單不會發生重複扣款或 race condition。
+3. **快照恢復（真實 DB）**：確認服務重啟後，真實 PostgreSQL 活動訂單能正確重建撮合引擎狀態。
