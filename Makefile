@@ -1,4 +1,4 @@
-.PHONY: build run test clean db-up db-down db-migrate help
+.PHONY: build run test smoke-test clean db-up db-down db-migrate help
 
 # 變數定義
 APP_NAME=exchange-server
@@ -26,6 +26,10 @@ run: ## 啟動伺服器 (需先啟動資料庫)
 test: ## 執行測試
 	@echo "🧪 執行測試..."
 	go test -v ./...
+
+smoke-test: ## 執行 k6 冒煙測試（核心交易流程）
+	@echo "🔥 執行 k6 核心冒煙測試..."
+	k6 run scripts/k6/smoke-test.js
 
 test-coverage: ## 執行測試並產生覆蓋率報告
 	@echo "📊 產生測試覆蓋率..."
