@@ -50,6 +50,22 @@ func NewWebSocketHandler() *WebSocketHandler {
 // Ensure implementation
 var _ core.TradeEventListener = (*WebSocketHandler)(nil)
 
+// OnOrderBookUpdate 實作 TradeEventListener 介面 — 推播掛單簿深度快照
+func (h *WebSocketHandler) OnOrderBookUpdate(snapshot *matching.OrderBookSnapshot) {
+	msg := map[string]any{
+		"type": "depth_snapshot",
+		"data": snapshot,
+	}
+
+	jsonMsg, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("JSON Marshal Error: %v", err)
+		return
+	}
+
+	h.Broadcast(jsonMsg)
+}
+
 // OnTrade 實作 TradeEventListener 介面
 func (h *WebSocketHandler) OnTrade(trade *matching.Trade) {
 	// 轉換為 JSON 訊息
