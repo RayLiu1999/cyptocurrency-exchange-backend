@@ -2,105 +2,89 @@
 
 這份文件詳細描述了加密貨幣交易所 (Crypto Exchange) 的系統架構設計，包含功能架構與各環境的部署架構。
 
-## 1. 功能架構圖 (Functional Architecture)
+## 1. 功能架構圖 (Functional Architecture - Dual-Mode)
 
-這張圖展示了交易所的核心功能模組，強調微服務拆分與事件驅動設計。
+這張圖展示了交易所的核心功能模組，特別強調了 **Dual-Mode（系統模擬 vs 市場模擬）** 的雙軌並行設計。
 
 ```mermaid
 graph TD
     %% 使用者與客戶端
-    ClientWeb["Web Client"]
+    ClientWeb["Web Client\n(Switch Mode)"]
     ClientApp["Mobile App"]
-    AdminClient["Admin Dashboard"]
-
-    %% 外部系統
-    Blockchain["Blockchain Nodes (BTC/ETH)"]
 
     subgraph "接入層 (Access Layer)"
-        Gateway["API Gateway / Load Balancer"]
-        WSS["WebSocket Server (Push Service)"]
+        Gateway["API Gateway / Middleware\n(Mode Context Injector)"]
+        WSS["WebSocket Server\n(Mode-Aware Push)"]
     end
 
-    subgraph "核心交易鏈路 (Core Trading Loop)"
-        direction TB
+    subgraph "雙模態路由與適配 (Dual-Mode Routing)"
+        Router{"Mode Router\n(INTERNAL / PAPER)"}
+        CCXT["CCXT Adapter\n(Market Sim)"]
+        MatchEng["本地撮合引擎\n(Internal Sim)"]
+    end
+
+    subgraph "核心服務 (Shared Services)"
         OrderSvc["訂單服務 (Order Service)"]
-        MatchEng["撮合引擎 (Matching Engine)"]
         WalletSvc["錢包服務 (Wallet Service)"]
-    end
-
-    subgraph "支撐服務 (Support Services)"
-        AuthSvc["認證服務 (Auth Service)"]
         MktDataSvc["行情服務 (Market Data Service)"]
-        RiskSvc["風控服務 (Risk Management)"]
     end
 
-    subgraph "資料與訊息層 (Data & Messaging)"
+    subgraph "外部行情 (Real Market)"
+        Exchange["Crypto Exchanges\n(Binance/OKX/Bybit)"]
+    end
+
+    subgraph "資料層 (Data Layer)"
         Kafka{"Kafka Event Bus"}
-        DB[("PostgreSQL Cluster")]
+        DB[("PostgreSQL / TimescaleDB")]
         Redis[("Redis Cluster")]
     end
 
     %% 連線關係
-    ClientWeb & ClientApp -->|HTTPS| Gateway
-    ClientWeb & ClientApp -->|WSS| WSS
-    AdminClient -->|HTTPS| Gateway
+    ClientWeb & ClientApp -->|HTTPS /w Mode Header| Gateway
+    Gateway -->|Context /w Mode| OrderSvc
+    
+    %% 路由邏輯
+    OrderSvc --> Router
+    Router -->|PAPER 模式| CCXT
+    Router -->|INTERNAL 模式| MatchEng
+    
+    CCXT <-->|REST/WS| Exchange
+    MatchEng -->|成交事件| Kafka
+    CCXT -->|行情/成交事件| Kafka
 
-    Gateway --> AuthSvc
-    Gateway --> OrderSvc
-    Gateway --> WalletSvc
-    Gateway --> MktDataSvc
+    %% 錢包與資產
+    OrderSvc -->|鎖定資金| WalletSvc
+    Kafka -->|解凍/結算| WalletSvc
 
-    %% 交易流程
-    OrderSvc -->|1. 凍結資金| WalletSvc
-    OrderSvc -->|2. 訂單建立事件| Kafka
-    Kafka -->|3. 訂單事件| MatchEng
-    MatchEng -->|4. 成交事件| Kafka
-
-    %% 結算與行情
-    Kafka -->|5. 結算/解凍| WalletSvc
-    Kafka -->|6. 更新訂單狀態| OrderSvc
-    Kafka -->|7. K線/深度更新| MktDataSvc
-
-    %% 資料存取
+    %% 行情推送
+    Kafka --> MktDataSvc
     MktDataSvc --> Redis
-    WSS -->|訂閱| Redis
-    WalletSvc -->|監聽充值/提現| Blockchain
+    Redis -->|Pub/Sub| WSS
+    WSS -->|即時推送| ClientWeb
 
     %% 儲存依賴
-    OrderSvc & WalletSvc & AuthSvc -.-> DB
+    OrderSvc & WalletSvc & MktDataSvc -.-> DB
 ```
 
 ### 核心模組功能說明
 
 1.  **接入層 (Access Layer)**
+    - **API Gateway / Middleware**: 除了路由與驗證，新增 **Trading Mode Middleware**，負責從 Header (`X-Trading-Mode`) 提取模式資訊並注入 Context。
+    - **WebSocket Server**: 根據用戶訂閱的模式，推送對應來源的行情數據（本地 vs 真實）。
 
-    - **API Gateway**: 負責請求路由、API Key 驗證、Rate Limiting (限流)、CORS 處理。
-    - **WebSocket Server**: 負責高頻率的資料推送，包含即時成交 (Trades)、訂單簿 (OrderBook)、K 線 (Candles)。
+2.  **雙模態路由與適配 (Dual-Mode Routing)**
+    - **Mode Router**: 系統的核心分流器。根據 Context 中的模式切換邏輯路徑。
+    - **本地撮合引擎 (Internal Sim)**: 高效能的本地對盤系統，完全可控，用於系統壓力測試與離線開發。
+    - **CCXT 適配層 (Market Sim)**: 接入外部交易所真實行情。提供 Paper Trading 功能，讓用戶在真實市場環境下進行策略驗證。
 
-2.  **核心交易鏈路 (Core Trading Loop)**
-
-    - **Order Service (訂單服務)**:
-      - 接收用戶下單 (Limit/Market) 與撤單請求。
-      - 維護訂單狀態 (New, Partial, Filled, Canceled)。
-      - **關鍵職責**: 確保訂單寫入 DB 後才發送事件，保證不掉單。
-    - **Matching Engine (撮合引擎)**:
-      - **核心中的核心**。全記憶體 (In-Memory) 運作，追求極致效能。
-      - 維護每個交易對 (Symbol) 的訂單簿 (OrderBook)。
-      - 輸出成交配對結果 (Matches)。
-    - **Wallet Service (錢包服務)**:
-      - 管理用戶資產餘額 (Available vs Locked)。
-      - 處理充值 (Deposit) 與提現 (Withdrawal) 的區塊鏈互動。
-      - **關鍵職責**: 確保帳務絕對準確 (Double Entry Bookkeeping)。
-
-3.  **支撐服務 (Support Services)**
-
-    - **Market Data Service**: 訂閱成交事件，聚合生成 OHLCV (K 線) 數據，維護 24h 漲跌幅。
-    - **Risk Service**: 風控系統，監控異常交易、大額提現、洗錢防制 (AML)。
+3.  **核心服務 (Shared Services)**
+    - **Order Service (訂單服務)**: 統籌訂單生命週期，不感知具體撮合細節，透過 Router 轉發。
+    - **Wallet Service (錢包服務)**: 管理不同模式下的資產。INTERNAL 與 PAPER 模式使用獨立的資金餘額，確保數據隔離。
+    - **Market Data Service**: 負責聚合 K 線。根據模式來源（本地成交 vs CCXT KLines）生成 OHLCV 數據並存入時序資料庫。
 
 4.  **基礎設施 (Infrastructure)**
-    - **Kafka**: 事件驅動的核心，解耦「下單」與「撮合」，實現流量削峰填谷。
-    - **Redis**: 快取熱點資料 (Token, User Profile) 與 Pub/Sub 訊息通道。
-    - **PostgreSQL**: 關聯式資料庫，儲存所有關鍵業務數據。
+    - **Kafka**: 統一事件匯流排。無論來自本地引擎或 CCXT 的事件都標準化後推入 Kafka，實現消費端模式透明。
+    - **PostgreSQL / TimescaleDB**: 儲存層。使用不同 Schema 或 Table Prefix 隔離 INTERNAL 與 PAPER 的交易記錄。
 
 ---
 

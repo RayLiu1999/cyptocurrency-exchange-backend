@@ -20,21 +20,25 @@
 > **開發策略**：採功能分立制，每個分支 (`feat/*`) 必須通過獨立組件測試後才合併至 `main`。
 
 ### 階段 A：Redis 快取優化 (`feat/redis-cache`)
+
 - [ ] **獨立組件**：Docker Compose 加入 Redis 鏡像。
 - [ ] **實作機制**：核心 Service 導入「Cache Aside」模式（先讀 Redis，未中才讀 DB）。
 - [ ] **測試目標**：`GET /orderbook` 性能提升，驗證 Redis 斷線時能正確 fallback 至 DB。
 
 ### 階段 B：Kafka 訊息隊列 (`feat/kafka-messaging`)
+
 - [ ] **獨立組件**：Docker Compose 加入 Kafka (Kraft mode)。
 - [ ] **實作機制**：API 改為非同步下單，訊息寫入 `orders.new` topic。
 - [ ] **測試目標**：模擬 DB 慢速寫入，驗證 API 仍能穩定回傳 `202 Accepted`（削峰填谷）。
 
 ### 階段 C：微服務拆分與彙整 (`feat/microservices`)
+
 - [ ] **架構遷移**：將單體代碼拆分為 `order-service` 與 `matching-engine` 獨立進程。
 - [ ] **通訊機制**：兩服務透過 Kafka 進行非同步溝通。
 - [ ] **測試目標**：全系統整合測試，確保微服務化後邏輯與單體一致。
 
 ### 階段 D：AWS ECS 雲端部屬 (`feat/aws-ecs-deploy`)
+
 - [ ] **基礎設施部署**：Terraform 建立 RDS, ElastiCache, MSK (或 EC2 Kafka)。
 - [ ] **自動化部署**：導入 `ecspresso` 進行 Task Definition 與 Service 更新管理。
 - [ ] **測試目標**：執行雲端壓力測試，對 ALB Endpoint 進行大流量壓測。
@@ -78,5 +82,3 @@
 - [ ] Paper Account 隔離：`paper_accounts` / `paper_orders` / `paper_trades` 獨立 Schema
 - [ ] 回測引擎模式分流：INTERNAL 用本地歷史成交、PAPER 用 CCXT 歷史 K 線
 - [ ] 前端 `TradingEnvironmentContext` 已完成（INTERNAL = 靛紫 / PAPER = 青綠）
-
-
