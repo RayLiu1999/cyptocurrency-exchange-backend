@@ -47,9 +47,9 @@ Phase 1.5b: 多交易對 (Multi-Symbol) ✅ DONE
 - [x] 同交易對可正常撮合
 - [x] GetEngine 重複呼叫應返回同一個 Engine
 
-Phase 7: 邊界條件 (Edge Cases) - 暫緩
-- [ ] 7.1 價格不匹配時，不成交
-- [ ] 7.2 自成交防護
+Phase 7: 邊界條件 (Edge Cases) ✅ DONE
+- [x] 7.1 價格不匹配時，不成交
+- [x] 7.2 自成交防護
 
 =====================================
 */
@@ -445,4 +445,49 @@ func TestEngineManager_GetEngine_ReturnsSameInstance(t *testing.T) {
 	engine2 := manager.GetEngine("BTC-USD")
 
 	assert.Same(t, engine1, engine2, "應返回同一個 Engine 實例")
+}
+
+// ============================================================
+// Phase 7: 邊界條件 (Edge Cases)
+// ============================================================
+
+// 7.1 買價低於賣價時，不得成交，雙方訂單應保留在訂單簿
+func TestEngine_PriceMismatch_NoTradeExecuted(t *testing.T) {
+	// Arrange
+	engine := NewEngine("BTC-USD")
+	sellID := uuid.New()
+	buyID := uuid.New()
+
+	// 掛一筆賣單，賣價 51000
+	sellOrder := NewOrder(sellID, uuid.New(), SideSell, decimal.NewFromInt(51000), decimal.NewFromInt(1))
+	engine.Process(sellOrder)
+
+	// 買單價格 50000 < 賣單 51000，不應成交
+	buyOrder := NewOrder(buyID, uuid.New(), SideBuy, decimal.NewFromInt(50000), decimal.NewFromInt(1))
+	trades := engine.Process(buyOrder)
+
+	// Assert
+	assert.Empty(t, trades, "價格不匹配時不得產生成交")
+	assert.Equal(t, 1, engine.OrderBook().AskCount(), "賣單應保留在訂單簿")
+	assert.Equal(t, 1, engine.OrderBook().BidCount(), "買單應保留在訂單簿")
+}
+
+// 7.2 同一個 user_id 的買賣單不可彼此成交（自成交防護）
+func TestEngine_SelfTrade_Prevented(t *testing.T) {
+	// Arrange
+	engine := NewEngine("BTC-USD")
+	sameUserID := uuid.New()
+
+	// 同一個用戶先掛賣單
+	sellOrder := NewOrder(uuid.New(), sameUserID, SideSell, decimal.NewFromInt(50000), decimal.NewFromInt(1))
+	engine.Process(sellOrder)
+
+	// 同一個用戶再送買單，價格匹配但應拒絕撮合
+	buyOrder := NewOrder(uuid.New(), sameUserID, SideBuy, decimal.NewFromInt(50000), decimal.NewFromInt(1))
+	trades := engine.Process(buyOrder)
+
+	// Assert
+	assert.Empty(t, trades, "自成交防護：不得對自己的訂單成交")
+	assert.Equal(t, 1, engine.OrderBook().AskCount(), "賣單應保留在訂單簿")
+	assert.Equal(t, 1, engine.OrderBook().BidCount(), "被拒絕的買單進入訂單簿等待") 
 }
