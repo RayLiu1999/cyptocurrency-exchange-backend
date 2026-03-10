@@ -26,6 +26,7 @@ type OrderRepository interface {
 	GetOrderForUpdate(ctx context.Context, id uuid.UUID) (*Order, error) // 加悲觀鎖（FOR UPDATE）
 	UpdateOrder(ctx context.Context, order *Order) error
 	GetOrdersByUser(ctx context.Context, userID uuid.UUID) ([]*Order, error)
+	GetActiveOrders(ctx context.Context) ([]*Order, error) // 取得所有尚未完全成交的訂單
 	DeleteAllOrders(ctx context.Context) error
 }
 
@@ -66,4 +67,5 @@ type ExchangeService interface {
 	GetRecentTrades(ctx context.Context, symbol string, limit int) ([]*matching.Trade, error)
 	ClearSimulationData(ctx context.Context) error
 	RechargeTestUser(ctx context.Context, userID uuid.UUID) error
+	RestoreEngineSnapshot(ctx context.Context) error // 伺服器啟動時，重現引擎狀態
 }

@@ -19,7 +19,7 @@ func (s *ExchangeServiceImpl) RegisterAnonymousUser(ctx context.Context) (*User,
 
 	user := &User{
 		ID:           newUserID,
-		Email:        fmt.Sprintf("anonymous_%s@test.com", newUserID.String()[:8]),
+		Email:        fmt.Sprintf("anonymous_%s@test.com", newUserID.String()),
 		PasswordHash: "N/A",
 		CreatedAt:    now,
 		UpdatedAt:    now,

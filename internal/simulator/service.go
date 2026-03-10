@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"math/rand"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -243,7 +244,8 @@ func (s *Service) runSimulation(ctx context.Context, traders []Trader, cfg Confi
 
 				if err := s.svc.PlaceOrder(ctx, order); err != nil {
 					log.Printf("❌ 模擬下單失敗: %v", err)
-					if errors.Is(err, core.ErrInsufficientFunds) {
+					if errors.Is(err, core.ErrInsufficientFunds) || strings.Contains(err.Error(), "餘額不足") {
+						log.Printf("⚠️ 觸發自動加值...")
 						s.svc.RechargeTestUser(ctx, trader.ID)
 					}
 				} else {

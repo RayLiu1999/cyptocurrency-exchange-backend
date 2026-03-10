@@ -118,6 +118,11 @@ func (m *MockExchangeService) RechargeTestUser(ctx context.Context, userID uuid.
 	return args.Error(0)
 }
 
+func (m *MockExchangeService) RestoreEngineSnapshot(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 func setupRouter(svc core.ExchangeService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

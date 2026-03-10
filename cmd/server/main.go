@@ -47,6 +47,12 @@ func main() {
 
 	// 4. Service (內建撮合引擎，注入 repo 作為所有的 Repository 實現)
 	svc := core.NewExchangeService(repo, repo, repo, repo, repo, "BTC-USD", wsHandler)
+
+	// 啟動時從資料庫還原未完成的訂單，重建掛單簿
+	if err := svc.RestoreEngineSnapshot(context.Background()); err != nil {
+		logger.Log.Error("還原撮合引擎快照失敗", zap.Error(err))
+	}
+
 	// 4-1. Simulator
 	sim := simulator.NewService(svc)
 

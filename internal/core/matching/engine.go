@@ -28,6 +28,13 @@ func (e *Engine) OrderBook() *OrderBook {
 	return e.orderBook
 }
 
+// RestoreOrder 將資料庫未完成的訂單直接放回訂單簿，不進行撮合
+func (e *Engine) RestoreOrder(order *Order) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.orderBook.AddOrder(order)
+}
+
 // Process 處理新訂單，返回成交結果
 func (e *Engine) Process(order *Order) []*Trade {
 	e.mu.Lock()
