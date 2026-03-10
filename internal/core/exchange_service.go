@@ -43,6 +43,38 @@ func NewExchangeService(orderRepo OrderRepository, accountRepo AccountRepository
 // Ensure implementation
 var _ ExchangeService = (*ExchangeServiceImpl)(nil)
 
+// RestoreEngineSnapshot 伺服器冷啟動時，從資料庫載入活動訂單至記憶體引擎
+func (s *ExchangeServiceImpl) RestoreEngineSnapshot(ctx context.Context) error {
+	orders, err := s.orderRepo.GetActiveOrders(ctx)
+	if err != nil {
+		return fmt.Errorf("載入活動訂單失敗: %w", err)
+	}
+
+	for _, order := range orders {
+		// 防呆機制：市價單絕對不能進撮合引擎的掛單簿
+		if order.Type != TypeLimit {
+			log.Printf("⚠️ 警告：嘗試恢復非限價單進入掛單簿，已忽略 (OrderID: %s)", order.ID)
+			continue
+		}
+
+		engine := s.engineManager.GetEngine(order.Symbol)
+		if engine != nil {
+			// 轉換為撮合引擎格式，引擎內部的 Quantity 代表剩餘未成交數量
+			matchingOrder := &matching.Order{
+				ID:       order.ID,
+				UserID:   order.UserID,
+				Side:     matching.OrderSide(order.Side),
+				Type:     matching.OrderType(order.Type),
+				Price:    order.Price,
+				Quantity: order.Quantity.Sub(order.FilledQuantity),
+			}
+			engine.RestoreOrder(matchingOrder)
+		}
+	}
+	log.Printf("✅ 成功從資料庫恢復 %d 筆活動訂單至撮合引擎", len(orders))
+	return nil
+}
+
 // ProcessTrade 處理成交結果，必須在事務內呼叫
 func (s *ExchangeServiceImpl) ProcessTrade(ctx context.Context, trade *matching.Trade, takerOrder *Order) error {
 	log.Printf("成交: 價格=%s, 數量=%s, Maker=%s, Taker=%s",

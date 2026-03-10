@@ -123,6 +123,7 @@ func (h *Handler) GetOrders(c *gin.Context) {
 			"price":           order.Price,
 			"quantity":        order.Quantity,
 			"filled_quantity": order.FilledQuantity,
+			"created_at":      order.CreatedAt,
 		}
 	}
 

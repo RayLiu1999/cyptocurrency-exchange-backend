@@ -84,6 +84,36 @@ func (r *PostgresRepository) GetOrdersByUser(ctx context.Context, userID uuid.UU
 	return orders, nil
 }
 
+func (r *PostgresRepository) GetActiveOrders(ctx context.Context) ([]*core.Order, error) {
+	executor := r.getExecutor(ctx)
+	// Status 1=NEW, 2=PARTIALLY_FILLED, Type 1=LIMIT
+	// 只恢復限價單，市價單不應該存入掛單簿
+	query := `
+		SELECT id, user_id, symbol, side, type, price, quantity, filled_quantity, status, created_at, updated_at
+		FROM orders 
+		WHERE status IN (1, 2) AND type = 1
+		ORDER BY created_at ASC`
+
+	rows, err := executor.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orders []*core.Order
+	for rows.Next() {
+		o, err := scanOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		orders = append(orders, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return orders, nil
+}
+
 func (r *PostgresRepository) DeleteAllOrders(ctx context.Context) error {
 	executor := r.getExecutor(ctx)
 	_, err := executor.Exec(ctx, "DELETE FROM orders")
