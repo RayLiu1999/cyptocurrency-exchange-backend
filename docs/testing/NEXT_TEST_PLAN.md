@@ -147,6 +147,32 @@
 - **Phase 6**: 驗證多用戶同時下單不發生雙倍支出（Double Spend）
 - **驗證重點**: goroutine 並發 + SQL `FOR UPDATE` 是否有效防止競態條件
 
-## 本輪建議起手式
+## Phase 6: 高併發與競態條件 ✅ 已完成
 
-目前 Phase 1–4 均已完成，下一步為 Phase 4 PostgreSQL 整合測試：
+- 目標檔案: `internal/core/concurrency_test.go`
+- 執行指令: `make concurrency-test` / `make race-test`
+
+### 已完成的測試
+
+| 測試名稱 | 驗證重點 |
+| :--- | :--- |
+| `TestConcurrency_MultipleUsersCancelSameOrder_OnlyOneSucceeds` | 10 個 goroutine 同時取消同一訂單，只能 1 個成功，資金只解鎖一次 |
+| `TestConcurrency_SimultaneousOrders_NoDoubleLock` | 同一用戶併發備出 5 筆訂單，餘額只能成功 1 筆，資金守恆 |
+| `TestConcurrency_MultiSeller_SingleBuyer_FundsConserved` | 5 賣家 + 1 買家一次成交，買賣雙方 BTC/USD 總量三方一致 |
+| `TestConcurrency_Race_PlaceAndCancel_NoNegativeBalance` | 連續下單立刻取消，驗證整個過程中資金絕不為負 |
+
+### 额外驗證：Race Detector
+
+`make race-test` 使用 Go 內建的 `-race` 旗標執行相同測試，結果為 **零 data race 張存**。
+
+## 所有 Phase 已完成 ✅
+
+Phase 1–6 全部完成。專案的測試套件已達到【生產環境就緒】標準：
+
+| 測試層級 | 執行指令 | 測試數 |
+| :--- | :--- | :--- |
+| 單元測試 (Unit) | `make test` | 30+ |
+| Repository 整合 | `make integration-test` | 13 |
+| E2E 端對端 | `make e2e-test` | 5 |
+| 高併發競態 | `make concurrency-test` | 4 |
+| Race Detector | `make race-test` | 4 (零 data race) |

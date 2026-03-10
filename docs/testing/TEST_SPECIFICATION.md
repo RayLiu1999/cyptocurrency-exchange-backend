@@ -146,16 +146,28 @@
 | 自成交防護 | 直接影響交易公平性與風控 |
 | API 錯誤路徑 | 容易在非法輸入或資料缺失時回錯誤狀態碼 |
 
-| 快照恢復（真實 DB） | Mock 層已驗證，但重啟後的真實 PostgreSQL 快照一致性仍未驗證 |
+| 快照恢復（真實 DB） | ✅ 已完成：RestoreEngineSnapshot 從真實 DB 重建引擎，使用隔離交易對驗證 |
 | 真實資料庫整合 | ✅ 已完成：Account/Order/Trade Repository 均已覆蓋，ExecTx 回滾行為通過驗證 |
-| 併發場景 | 無法證明沒有 race condition 或重複扣款 |
+| 併發場景 | ✅ 已完成：雙倍支出防護、資金守恆、Race Detector 零張存驗證 |
 
 ---
 
+## 所有 Phase 已完成 ✅
+
+Phase 1–6 全部完成。測試套件摘要：
+
+| 測試層級 | 執行指令 | 測試數 |
+| :--- | :--- | :--- |
+| 單元測試 (Unit) | `make test` | 30+ |
+| Repository 整合 | `make integration-test` | 13 |
+| E2E 端對端 | `make e2e-test` | 5 |
+| 高併發競態 | `make concurrency-test` | 4 |
+| Race Detector | `make race-test` | 4（零 data race） |
+
 ## 建議下一步
 
-Phase 1–4 均已完成。整合測試階段並發現並修正一個 **資金洩漏 Bug**（`UnlockFunds` 未正確還原 `balance`，已於 `account_repository.go` 修正）。
+Phase 1–6 均已完成。整合測試階段並發現並修正一個 **資金洩漏 Bug**（`UnlockFunds` 未正確還原 `balance`，已於 `account_repository.go` 修正）。
 
-1. **端對端下單流程**：HTTP → Service → Repository → Matching → Trade Persistence 的完整鏈路驗證。
-2. **併發與競態**：確認多用戶同時下單不會發生重複扣款或 race condition。
+1. **持續整合 (CI)**：將 `integration-test`、`e2e-test`、`concurrency-test` 加入 GitHub Actions，確保每次 PR 自動驗證。
+2. **監控與告警**：在生產環境加入資金守恆的定時稽核查詢，偵測異常。
 3. **真實快照恢復（DB + Engine）**：確認服務重啟後，真實 PostgreSQL 活動訂單能正確重建撮合引擎狀態。

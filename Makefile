@@ -1,4 +1,4 @@
-.PHONY: build run test integration-test e2e-test smoke-test clean db-up db-down db-migrate help
+.PHONY: build run test integration-test e2e-test concurrency-test race-test smoke-test clean db-up db-down db-migrate help
 
 # 變數定義
 APP_NAME=exchange-server
@@ -35,7 +35,17 @@ integration-test: ## 執行 PostgreSQL 整合測試（需資料庫連線）
 e2e-test: ## 執行端對端整合測試（Service + Repository + Matching，需資料庫連線）
 	@echo "🔗 執行端對端整合測試..."
 	DATABASE_URL="postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable" \
-	go test -v -tags=integration ./internal/core/ -timeout 60s
+	go test -v -tags=integration ./internal/core/ -run TestE2E -timeout 60s
+
+concurrency-test: ## 執行高併發與競態條件測試（需資料庫連線）
+	@echo "⚡ 執行高併發競態測試..."
+	DATABASE_URL="postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable" \
+	go test -v -tags=integration ./internal/core/ -run TestConcurrency -timeout 120s
+
+race-test: ## 執行含 race detector 的競態條件測試（需資料庫連線）
+	@echo "🏁 執行 Race Detector 競態測試..."
+	DATABASE_URL="postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable" \
+	go test -v -race -tags=integration ./internal/core/ -run TestConcurrency -timeout 120s
 
 smoke-test: ## 執行 k6 冒煙測試（核心交易流程）
 	@echo "🔥 執行 k6 核心冒煙測試..."
