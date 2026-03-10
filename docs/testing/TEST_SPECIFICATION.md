@@ -113,7 +113,7 @@
 
 | 測試主題 | 內容 | 狀態 |
 | :--- | :--- | :--- |
-| Repository + PostgreSQL | 真實 DB 建立、查詢、更新、刪除 | ❌ 尚未覆蓋 |
+| Repository + PostgreSQL | 真實 DB 建立、查詢、更新、刪除 | ✅ 已完成 |
 | 端對端下單流程 | HTTP -> Service -> Repository -> Matching -> Trade Persistence | ❌ 尚未覆蓋 |
 | 快照恢復 | 系統重啟後從 DB 恢復掛單狀態 | ❌ 尚未覆蓋 |
 | 併發下單 | 多用戶同時下單與競態條件驗證 | ❌ 尚未覆蓋 |
@@ -147,15 +147,15 @@
 | API 錯誤路徑 | 容易在非法輸入或資料缺失時回錯誤狀態碼 |
 
 | 快照恢復（真實 DB） | Mock 層已驗證，但重啟後的真實 PostgreSQL 快照一致性仍未驗證 |
-| 真實資料庫整合 | 目前無法證明 repository 與 transaction 配合正確 |
+| 真實資料庫整合 | ✅ 已完成：Account/Order/Trade Repository 均已覆蓋，ExecTx 回滾行為通過驗證 |
 | 併發場景 | 無法證明沒有 race condition 或重複扣款 |
 
 ---
 
 ## 建議下一步
 
-Phase 1（撮合引擎）、Phase 2（API Handler）、Phase 3（Service 層事務與快照）均已完成。
+Phase 1–4 均已完成。整合測試階段並發現並修正一個 **資金洩漏 Bug**（`UnlockFunds` 未正確還原 `balance`，已於 `account_repository.go` 修正）。
 
-1. **Phase 4（PostgreSQL 整合測試）**：對 `account_repository.go`、`order_repository.go`、`trade_repository.go` 新增真實資料庫整合測試，驗證 `ExecTx` 回滾行為。
+1. **端對端下單流程**：HTTP → Service → Repository → Matching → Trade Persistence 的完整鏈路驗證。
 2. **併發與競態**：確認多用戶同時下單不會發生重複扣款或 race condition。
-3. **快照恢復（真實 DB）**：確認服務重啟後，真實 PostgreSQL 活動訂單能正確重建撮合引擎狀態。
+3. **真實快照恢復（DB + Engine）**：確認服務重啟後，真實 PostgreSQL 活動訂單能正確重建撮合引擎狀態。

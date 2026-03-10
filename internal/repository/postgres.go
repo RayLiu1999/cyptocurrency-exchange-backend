@@ -51,3 +51,8 @@ func (r *PostgresRepository) getExecutor(ctx context.Context) DBExecutor {
 	}
 	return r.db
 }
+
+// Pool 回傳底層連線池，供整合測試建立清理用 SQL 使用
+func (r *PostgresRepository) Pool() *pgxpool.Pool {
+	return r.db
+}

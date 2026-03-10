@@ -69,7 +69,7 @@ func (r *PostgresRepository) UnlockFunds(ctx context.Context, userID uuid.UUID, 
 	executor := r.getExecutor(ctx)
 	query := `
 		UPDATE accounts 
-		SET locked = locked - $1, updated_at = $4
+		SET balance = balance + $1, locked = locked - $1, updated_at = $4
 		WHERE user_id = $2 AND currency = $3 AND locked >= $1`
 
 	_, err := executor.Exec(ctx, query, amount, userID, currency, time.Now().UnixMilli())

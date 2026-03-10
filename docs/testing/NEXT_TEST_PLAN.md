@@ -97,7 +97,7 @@
 1. 關鍵交易路徑至少有一個失敗回滾測試。
 2. 快照恢復至少覆蓋成功與失敗兩條路徑。
 
-## Phase 4: PostgreSQL 整合測試
+## Phase 4: PostgreSQL 整合測試 ✅ 已完成
 
 - 目標檔案: 建議新增 `internal/repository/*_integration_test.go`
 - 優先度: P2
