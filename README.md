@@ -87,9 +87,14 @@ make test-coverage
 
 ### 測試 API
 
-您可以使用提供的腳本進行簡單的 API 測試：
+您可以使用單一 k6 smoke test 快速驗證 API 可用性：
 ```bash
-./test-api.sh
+make smoke-test
+```
+
+若尚未安裝 k6：
+```bash
+brew install k6
 ```
 
 ---

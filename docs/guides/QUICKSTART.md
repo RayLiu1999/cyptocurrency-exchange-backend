@@ -40,7 +40,7 @@ go run cmd/simulator/main.go
    - 進入 `infra/ecspresso/` 使用 `ecspresso deploy` 同步 Task Definition 與服務。
    - 確保 ECR 已存在並包含最新 Docker Image。
 3. **執行壓測**：從本地或 EC2 啟動 `cmd/simulator` 對 ALB Endpoint 進行高壓測試。
-4. **結果分析**：參考 [docs/test-metrics/AWS_STRESS_TEST_METRICS.md](../test-metrics/AWS_STRESS_TEST_METRICS.md)。
+4. **結果分析**：參考 [docs/testing/AWS_STRESS_TEST_METRICS.md](/Volumes/KINGSTON/Programming/cyptocurrency_exchange/backend/docs/testing/AWS_STRESS_TEST_METRICS.md)。
 
 ---
 
@@ -65,8 +65,10 @@ ecspresso logs    # 即時查看 CloudWatch 服務日誌
 ## 4. 常用開發指令 (Development CLI Tools)
 - **單元測試**: `make test`
 - **重置資料庫**: `make db-reset`
-- **API 手動測試**: `./test-api.sh`
+- **k6 冒煙測試**: `make smoke-test`
 - **生成 Swagger**: `swag init -g cmd/server/main.go`
+
+若本機尚未安裝 k6：`brew install k6`
 
 ## 資料庫連線資訊
 

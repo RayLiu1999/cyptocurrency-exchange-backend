@@ -65,10 +65,12 @@ backend/
 │   ├── simulator/        # 模擬下單 Service
 │   └── infrastructure/logger/
 ├── sql/                  # schema.sql, seed.sql
+├── scripts/
+│   └── k6/
+│       └── smoke-test.js     # 單一 k6 冒煙測試腳本
 ├── infra/
 │   ├── terraform/        # 基礎設施 (VPC, RDS, ALB, ECS Cluster)
 │   └── ecspresso/        # ECS 服務定義與版本管理 (Task Definition, Service)
-└── test-api-v1.sh        # API 自動化測試腳本
 ```
 
 ---

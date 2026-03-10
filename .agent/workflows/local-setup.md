@@ -62,7 +62,7 @@ make dev
 ## 測試 API
 
 ```bash
-./test-api.sh
+make smoke-test
 ```
 
 或使用 curl：

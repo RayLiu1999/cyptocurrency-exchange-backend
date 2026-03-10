@@ -22,7 +22,7 @@ main (Stage 1 Monolith)
 
 | 分支 | 獨立測試行為 | 成功指標 |
 | :--- | :--- | :--- |
-| `feat/redis-cache` | 使用 `test-api-v1.sh` 測試回應延遲 | API 延遲顯著下降，且 Redis 斷線時系統不崩潰 |
+| `feat/redis-cache` | 使用 `make smoke-test` 執行 k6 smoke test，觀察 orderbook 與下單流程延遲 | API 延遲顯著下降，且 Redis 斷線時系統不崩潰 |
 | `feat/kafka-messaging` | 大量下單測試，觀察 API 回傳與後台處理時間差 | API 立即回傳 202，DB 異步完成處理 (削峰填谷) |
 | `feat/microservices` | 重啟各微服務，驗證服務間通訊與重新連線機制 | 兩服務獨立運行下，撮合與成交流程依然正確 |
 | `feat/aws-ecs-deploy` | 對 ALB Endpoint 進行壓力測試 | CloudWatch 觀察到正常的 CPU/Mem 分佈與 Scaling |
