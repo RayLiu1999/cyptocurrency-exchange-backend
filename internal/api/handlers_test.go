@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/RayLiu1999/exchange/internal/core"
 	"github.com/RayLiu1999/exchange/internal/core/matching"
+	"github.com/RayLiu1999/exchange/internal/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -128,7 +130,11 @@ func setupRouter(svc core.ExchangeService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	handler := NewHandler(svc, nil)
-	handler.RegisterRoutes(r)
+	// 測試環境使用允許所有請求的 NoOp Limiter 與空的 Idempotency Store，
+	// 確保既有測試不被安全機制攔截，同時保持 RegisterRoutes 的介面一致性
+	noopLimiter := middleware.NewMemoryRateLimiter(1000, 1000, time.Minute)
+	idempStore := middleware.NewMemoryIdempotencyStore()
+	handler.RegisterRoutes(r, noopLimiter, noopLimiter, idempStore)
 	return r
 }
 

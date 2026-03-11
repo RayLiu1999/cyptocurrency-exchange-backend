@@ -1,7 +1,10 @@
 package api
 
 import (
+	"time"
+
 	"github.com/RayLiu1999/exchange/internal/core"
+	"github.com/RayLiu1999/exchange/internal/middleware"
 	"github.com/RayLiu1999/exchange/internal/simulator"
 	"github.com/gin-gonic/gin"
 )
@@ -15,19 +18,45 @@ func NewHandler(svc core.ExchangeService, sim *simulator.Service) *Handler {
 	return &Handler{svc: svc, simulator: sim}
 }
 
-// RegisterRoutes 註冊路由
-func (h *Handler) RegisterRoutes(router gin.IRouter) {
-	router.GET("/orders", h.GetOrders)
-	router.POST("/orders", h.PlaceOrder)
-	router.GET("/orders/:id", h.GetOrder)
-	router.DELETE("/orders/:id", h.CancelOrder)
-	router.GET("/orderbook", h.GetOrderBook)
-	router.POST("/test/join", h.JoinArena)
-	router.GET("/accounts", h.GetBalances)
-	router.GET("/klines", h.GetKLines)
-	router.GET("/trades", h.GetRecentTrades)
-	router.POST("/simulation/start", h.StartSimulation)
-	router.POST("/simulation/stop", h.StopSimulation)
-	router.GET("/simulation/status", h.GetSimulationStatus)
-	router.DELETE("/simulation/data", h.ClearSimulationData)
+// RegisterRoutes 註冊路由，並依路由類型掛載對應的安全 Middleware
+// publicLimiter：公共讀取 API 的限流器（寬鬆）
+// privateLimiter：寫入型 API 的限流器（嚴格）
+// idempStore：冪等性儲存（防止重複下單）
+func (h *Handler) RegisterRoutes(router gin.IRouter, publicLimiter, privateLimiter middleware.RateLimiter, idempStore middleware.IdempotencyStore) {
+	// === 公共 API（讀取）：掛載寬鬆限流 ===
+	public := router.Group("/")
+	public.Use(middleware.RateLimitMiddleware(publicLimiter))
+	{
+		public.GET("/orderbook", h.GetOrderBook)
+		public.GET("/klines", h.GetKLines)
+		public.GET("/trades", h.GetRecentTrades)
+	}
+
+	// === 私有 API（寫入/查詢）：掛載嚴格限流 ===
+	private := router.Group("/")
+	private.Use(middleware.RateLimitMiddleware(privateLimiter))
+	{
+		private.GET("/orders", h.GetOrders)
+		private.GET("/orders/:id", h.GetOrder)
+		private.DELETE("/orders/:id", h.CancelOrder)
+		private.GET("/accounts", h.GetBalances)
+
+		// 模擬器管理 API
+		private.POST("/simulation/start", h.StartSimulation)
+		private.POST("/simulation/stop", h.StopSimulation)
+		private.GET("/simulation/status", h.GetSimulationStatus)
+		private.DELETE("/simulation/data", h.ClearSimulationData)
+
+		// 測試工具
+		private.POST("/test/join", h.JoinArena)
+	}
+
+	// === 下單 API：最嚴格限流 + 冪等性保護 ===
+	orders := router.Group("/")
+	orders.Use(middleware.RateLimitMiddleware(privateLimiter))
+	orders.Use(middleware.IdempotencyMiddleware(idempStore, 24*time.Hour))
+	{
+		orders.POST("/orders", h.PlaceOrder)
+	}
 }
+

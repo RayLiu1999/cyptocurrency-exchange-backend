@@ -2,9 +2,8 @@ package main
 
 import (
 	"context"
-	"os"
-
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/RayLiu1999/exchange/internal/api"
 	"github.com/RayLiu1999/exchange/internal/core"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
+	"github.com/RayLiu1999/exchange/internal/middleware"
 	"github.com/RayLiu1999/exchange/internal/repository"
 	"github.com/RayLiu1999/exchange/internal/simulator"
 	"github.com/gin-contrib/cors"
@@ -56,30 +56,37 @@ func main() {
 	// 4-1. Simulator
 	sim := simulator.NewService(svc)
 
-	// 5. HTTP Handler
-	handler := api.NewHandler(svc, sim)
-
 	// 6. 啟動伺服器
 	r := gin.Default()
 
-	// CORS Setup
-	config := cors.DefaultConfig()
-	config.AllowAllOrigins = true
-	config.AllowCredentials = true
-	config.AddAllowHeaders("Authorization")
-	r.Use(cors.New(config))
+	// CORS：只允許白名單 Origin（防 CSRF），加入 Idempotency-Key Header 許可
+	corsConfig := cors.Config{
+		AllowOrigins: []string{
+			"http://localhost:5173", // 本地前端開發
+			"http://localhost:3000",
+		},
+		AllowMethods:     []string{"GET", "POST", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Idempotency-Key"},
+		AllowCredentials: false,
+		MaxAge:           12 * time.Hour,
+	}
+	r.Use(cors.New(corsConfig))
 
-	// API v1 Routing Group
+	// 初始化限流器（Token Bucket）與冪等性 Store（Memory）
+	publicLimiter := middleware.NewMemoryRateLimiter(1, 60, 10*time.Minute)   // 公共 API：60 次/分鐘/IP
+	privateLimiter := middleware.NewMemoryRateLimiter(10, 10, 10*time.Minute) // 私有 API：10 次/秒/IP
+	idempStore := middleware.NewMemoryIdempotencyStore()
+
+	// API v1 Routing Group，掛載 5. HTTP Handler
+	handler := api.NewHandler(svc, sim)
 	v1 := r.Group("/api/v1")
-	handler.RegisterRoutes(v1)
+	handler.RegisterRoutes(v1, publicLimiter, privateLimiter, idempStore)
 
-	// WebSocket Route (Register at root to match frontend expectation: ws://localhost:8080/ws)
+	// WebSocket Route
 	r.GET("/ws", wsHandler.HandleWS)
 
-	// Swagger Documentation (Design-First)
-	// 提供 docs 目錄，以便支援多個 YAML 檔案的參照
+	// Swagger Documentation
 	r.Static("/docs", "docs")
-	// 設定 Swagger UI 讀取該檔案
 	url := ginSwagger.URL("http://localhost:8080/docs/swagger.yaml")
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, url))
 

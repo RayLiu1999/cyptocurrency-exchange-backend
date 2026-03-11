@@ -26,6 +26,12 @@ func (h *Handler) PlaceOrder(c *gin.Context) {
 		return
 	}
 
+	// 執行數值範圍與業務規則驗證（Symbol、Quantity、Price 精度與上下限）
+	if err := validatePlaceOrderRequest(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	userID, err := uuid.Parse(req.UserID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user_id"})
