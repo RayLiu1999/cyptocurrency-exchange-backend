@@ -57,17 +57,6 @@ test-coverage: ## 執行測試並產生覆蓋率報告
 	go tool cover -html=coverage.txt -o coverage.html
 	@echo "✅ 覆蓋率報告: coverage.html"
 
-db-up: ## 啟動資料庫 (Docker Compose)
-	@echo "🐘 啟動資料庫..."
-	docker-compose up -d
-	@echo "⏳ 等待資料庫啟動..."
-	sleep 3
-	@echo "✅ 資料庫已啟動"
-
-db-down: ## 停止資料庫
-	@echo "🛑 停止資料庫..."
-	docker-compose down
-
 db-migrate: ## 執行資料庫 Migration
 	@echo "📊 執行 Migration..."
 	docker exec -i postgres psql -U $(DB_USER) -d $(DB_NAME) < sql/schema.sql
@@ -78,12 +67,14 @@ db-seed: ## 插入測試資料
 	docker exec -i postgres psql -U $(DB_USER) -d $(DB_NAME) < sql/seed.sql
 	@echo "✅ 測試資料插入完成"
 
-db-reset: db-down ## 重置資料庫（刪除並重建）
-	@echo "🔄 重置資料庫..."
-	docker-compose down -v
-	$(MAKE) db-up
+db-fresh: ## 快速清空並重建資料庫表結構
+	@echo "🧹 清空並重建 Public Schema..."
+	docker exec -i postgres psql -U $(DB_USER) -d $(DB_NAME) -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 	$(MAKE) db-migrate
-	@echo "✅ 資料庫重置完成"
+	@echo "✅ 資料庫表結構已清空並重建"
+
+db-refresh: db-fresh db-seed ## 快速重建表結構並寫入假資料 (類似 Laravel migrate:refresh --seed)
+	@echo "✅ 資料庫重建與測試資料寫入完成"
 
 clean: ## 清理編譯檔案
 	@echo "🧹 清理編譯檔案..."

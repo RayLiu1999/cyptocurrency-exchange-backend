@@ -238,8 +238,8 @@ func (s *Service) runSimulation(ctx context.Context, traders []Trader, cfg Confi
 					Symbol:   cfg.Symbol,
 					Side:     side,
 					Type:     orderType,
-					Price:    decimal.NewFromFloat(price),
-					Quantity: qty,
+					Price:    decimal.NewFromFloat(price).Round(2), // 確保模擬的訂單符合前端的 2 位小數顯示 (Tick Size = 0.01)
+					Quantity: qty.Round(4),                         // 數量也符合前端的顯示習慣
 				}
 
 				if err := s.svc.PlaceOrder(ctx, order); err != nil {
