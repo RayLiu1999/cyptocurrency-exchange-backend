@@ -11,7 +11,7 @@ import (
 // idempotencyEntry 冪等性快取條目
 type idempotencyEntry struct {
 	statusCode int
-	body       gin.H
+	body       []byte // 儲存原始 JSON bytes，避免反序列化成本與空 body 問題
 	expiresAt  time.Time
 }
 
@@ -20,7 +20,7 @@ type IdempotencyStore interface {
 	// Get 取得已快取的結果，若不存在回傳 nil
 	Get(key string) *idempotencyEntry
 	// Set 儲存結果，ttl 後過期
-	Set(key string, statusCode int, body gin.H, ttl time.Duration)
+	Set(key string, statusCode int, body []byte, ttl time.Duration)
 }
 
 // memoryIdempotencyStore 基於 In-Memory 的冪等性儲存
@@ -34,7 +34,7 @@ func NewMemoryIdempotencyStore() IdempotencyStore {
 	s := &memoryIdempotencyStore{
 		store: make(map[string]*idempotencyEntry),
 	}
-	// 背景協程定期清理過期條目
+	// 背景協程定期清理過期條目，避免 Memory 洩漏
 	go s.cleanupLoop()
 	return s
 }
@@ -51,12 +51,15 @@ func (s *memoryIdempotencyStore) Get(key string) *idempotencyEntry {
 }
 
 // Set 儲存回應至快取
-func (s *memoryIdempotencyStore) Set(key string, statusCode int, body gin.H, ttl time.Duration) {
+// 複製一份 bytes 避免底層陣列被外部意外修改
+func (s *memoryIdempotencyStore) Set(key string, statusCode int, body []byte, ttl time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	bodyCopy := make([]byte, len(body))
+	copy(bodyCopy, body)
 	s.store[key] = &idempotencyEntry{
 		statusCode: statusCode,
-		body:       body,
+		body:       bodyCopy,
 		expiresAt:  time.Now().Add(ttl),
 	}
 }
@@ -88,31 +91,30 @@ func IdempotencyMiddleware(store IdempotencyStore, ttl time.Duration) gin.Handle
 			return
 		}
 
-		// Cache Hit：此 Key 已被處理過，直接回傳快取結果，不觸發任何業務邏輯
+		// Cache Hit：直接用 c.Data 回傳儲存好的原始 JSON bytes，不觸發任何業務邏輯
 		if entry := store.Get(key); entry != nil {
-			c.JSON(entry.statusCode, entry.body)
+			c.Data(entry.statusCode, "application/json", entry.body)
 			c.Abort()
 			return
 		}
 
-		// Cache Miss：首次請求，正常執行，並在完成後將結果快取
-		// 透過替換 ResponseWriter 的方式攔截 Handler 的回傳值
-		blw := &bodyLogWriter{body: gin.H{}, ResponseWriter: c.Writer}
+		// Cache Miss：首次請求，用 bodyLogWriter 攔截 Handler 的回傳 bytes
+		blw := &bodyLogWriter{ResponseWriter: c.Writer}
 		c.Writer = blw
 		c.Next()
 
-		// Handler 完成後，若狀態 >= 400 則不快取（錯誤回應不應被重用）
-		if blw.statusCode < 400 {
+		// Handler 完成後，若狀態 < 400 才快取（錯誤回應不應被重用）
+		if blw.statusCode < 400 && len(blw.body) > 0 {
 			store.Set(key, blw.statusCode, blw.body, ttl)
 		}
 	}
 }
 
-// bodyLogWriter 包裝 gin.ResponseWriter，攔截 JSON 回應內容以供快取
+// bodyLogWriter 包裝 gin.ResponseWriter，同時攔截並記錄 Response bytes 以供快取
 type bodyLogWriter struct {
 	gin.ResponseWriter
 	statusCode int
-	body       gin.H
+	body       []byte // 儲存 Handler 回傳的原始 bytes
 }
 
 // WriteHeader 攔截並記錄 HTTP Status Code
@@ -121,10 +123,13 @@ func (w *bodyLogWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
-// WriteJSON 攔截 JSON 回傳（Gin 的 c.JSON 最終會呼叫此方法）
+// Write 攔截 Response Body bytes：同時寫給 Client 並 append 到本地快取
+// 修復：舊版只寫給 Client 但忘記存進 w.body，導致快取永遠是空 body
 func (w *bodyLogWriter) Write(b []byte) (int, error) {
 	if w.statusCode == 0 {
 		w.statusCode = http.StatusOK
 	}
+	// 關鍵修復：將經過的 bytes append 至 w.body 以供後續快取
+	w.body = append(w.body, b...)
 	return w.ResponseWriter.Write(b)
 }

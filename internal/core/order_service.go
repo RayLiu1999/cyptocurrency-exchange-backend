@@ -236,11 +236,11 @@ func (s *ExchangeServiceImpl) PlaceOrder(ctx context.Context, order *Order) erro
 			log.Printf("原子結算事務失敗: %v", err)
 		}
 	} else {
-		// 無成交：限價單進入 OrderBook 排隊，只更新時間戳並通知前端
-		order.UpdatedAt = time.Now().UnixMilli()
-		if err := s.orderRepo.UpdateOrder(ctx, order); err != nil {
-			log.Printf("更新訂單時間戳失敗: %v", err)
-		}
+		// 無成交：限價單已在第一事務（CreateOrder）完整寫入 DB，進入 OrderBook 排隊等候 Maker。
+		// ⚠️ 絕對不可在此呼叫 UpdateOrder！
+		// 此時 order 是建立前的「舊快照」(Status=NEW)，而這張單現在是 Maker，
+		// 隨時可能被其他 Goroutine 的 Settlement Tx 成交並更新為 FILLED。
+		// 若在此裸呼叫 UpdateOrder，會把 FILLED 狀態硬蓋回 NEW（Lost Update 復燃）。
 		if s.tradeListener != nil {
 			s.tradeListener.OnOrderUpdate(order)
 		}
