@@ -8,8 +8,10 @@ import (
 	"strings"
 
 	"github.com/RayLiu1999/exchange/internal/core/matching"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
+	"go.uber.org/zap"
 )
 
 // ExchangeServiceImpl 交易所服務實作
@@ -21,6 +23,7 @@ type ExchangeServiceImpl struct {
 	tradeListener TradeEventListener
 	txManager     DBTransaction
 	engineManager *matching.EngineManager
+	cacheRepo     CacheRepository // Redis 快取 (可選)
 }
 
 // AccountUpdate 資金變更紀錄
@@ -87,7 +90,16 @@ func AggregateAndSortAccountUpdates(updates []AccountUpdate) []AccountUpdate {
 }
 
 // NewExchangeService 建立交易所服務
-func NewExchangeService(orderRepo OrderRepository, accountRepo AccountRepository, tradeRepo TradeRepository, userRepo UserRepository, txManager DBTransaction, defaultSymbol string, tradeListener TradeEventListener) *ExchangeServiceImpl {
+func NewExchangeService(
+	orderRepo OrderRepository,
+	accountRepo AccountRepository,
+	tradeRepo TradeRepository,
+	userRepo UserRepository,
+	txManager DBTransaction,
+	defaultSymbol string,
+	tradeListener TradeEventListener,
+	cacheRepo CacheRepository, // 注入 CacheRepository
+) *ExchangeServiceImpl {
 	manager := matching.NewEngineManager()
 	// 預先建立預設交易對的 Engine
 	manager.GetEngine(defaultSymbol)
@@ -99,11 +111,28 @@ func NewExchangeService(orderRepo OrderRepository, accountRepo AccountRepository
 		tradeListener: tradeListener,
 		txManager:     txManager,
 		engineManager: manager,
+		cacheRepo:     cacheRepo, // 賦值
 	}
 }
 
 // Ensure implementation
 var _ ExchangeService = (*ExchangeServiceImpl)(nil)
+
+// OnOrderBookUpdate 當訂單簿有變化時被呼叫
+// [Redis 升級] 除了通知 Frontend，也非同步更新 Redis 快取
+func (s *ExchangeServiceImpl) OnOrderBookUpdate(snapshot *matching.OrderBookSnapshot) {
+	if s.cacheRepo != nil {
+		go func() {
+			if err := s.cacheRepo.SetOrderBookSnapshot(context.Background(), snapshot); err != nil {
+				logger.Error("更新 Redis 訂單簿快取失敗", zap.Error(err))
+			}
+		}()
+	}
+
+	if s.tradeListener != nil {
+		s.tradeListener.OnOrderBookUpdate(snapshot)
+	}
+}
 
 // RestoreEngineSnapshot 伺服器冷啟動時，從資料庫載入活動訂單至記憶體引擎
 func (s *ExchangeServiceImpl) RestoreEngineSnapshot(ctx context.Context) error {

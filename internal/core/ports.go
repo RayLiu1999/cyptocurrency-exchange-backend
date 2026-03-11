@@ -55,6 +55,12 @@ type UserRepository interface {
 	GetUserByEmail(ctx context.Context, email string) (*User, error)
 }
 
+// CacheRepository 定義快取儲存層介面 (依賴反轉)
+type CacheRepository interface {
+	GetOrderBookSnapshot(ctx context.Context, symbol string) (*matching.OrderBookSnapshot, error)
+	SetOrderBookSnapshot(ctx context.Context, snapshot *matching.OrderBookSnapshot) error
+}
+
 // ExchangeService defines the core business logic
 type ExchangeService interface {
 	PlaceOrder(ctx context.Context, order *Order) error

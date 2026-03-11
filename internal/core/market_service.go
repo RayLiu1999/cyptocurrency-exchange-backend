@@ -5,15 +5,37 @@ import (
 	"strings"
 
 	"github.com/RayLiu1999/exchange/internal/core/matching"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
+	"go.uber.org/zap"
 )
 
 // GetOrderBook 取得即時訂單簿
+// [Redis 升級] 優先從 Redis 讀取，若無則 fallback 至 Memory Engine 並非同步回填快取
 func (s *ExchangeServiceImpl) GetOrderBook(ctx context.Context, symbol string) (*matching.OrderBookSnapshot, error) {
+	// 1. 嘗試從快取讀取
+	if s.cacheRepo != nil {
+		if snapshot, err := s.cacheRepo.GetOrderBookSnapshot(ctx, symbol); err == nil && snapshot != nil {
+			logger.Log.Info("🚀 [Redis Cache] Hit", zap.String("symbol", symbol))
+			return snapshot, nil
+		}
+		logger.Log.Info("💨 [Redis Cache] Miss", zap.String("symbol", symbol))
+	}
+
+	// 2. Cache Miss: 從 Engine 讀取
 	engine := s.engineManager.GetEngine(symbol)
 	if engine == nil {
 		return matching.NewOrderBookSnapshot(symbol), nil
 	}
-	return engine.GetOrderBookSnapshot(20), nil
+	snapshot := engine.GetOrderBookSnapshot(20)
+
+	// 3. 非同步回填快取 (Write-Aside)
+	if s.cacheRepo != nil {
+		go func() {
+			s.cacheRepo.SetOrderBookSnapshot(context.Background(), snapshot)
+		}()
+	}
+
+	return snapshot, nil
 }
 
 func (s *ExchangeServiceImpl) GetKLines(ctx context.Context, symbol string, interval string, limit int) ([]*KLine, error) {
