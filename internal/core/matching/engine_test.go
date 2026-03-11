@@ -482,12 +482,14 @@ func TestEngine_SelfTrade_Prevented(t *testing.T) {
 	sellOrder := NewOrder(uuid.New(), sameUserID, SideSell, decimal.NewFromInt(50000), decimal.NewFromInt(1))
 	engine.Process(sellOrder)
 
-	// 同一個用戶再送買單，價格匹配但應拒絕撮合
+	// 同一個用戶再送買單，價格匹配但應拒絕撮合 (觸發 STP - Cancel Newest)
 	buyOrder := NewOrder(uuid.New(), sameUserID, SideBuy, decimal.NewFromInt(50000), decimal.NewFromInt(1))
 	trades := engine.Process(buyOrder)
 
 	// Assert
 	assert.Empty(t, trades, "自成交防護：不得對自己的訂單成交")
 	assert.Equal(t, 1, engine.OrderBook().AskCount(), "賣單應保留在訂單簿")
-	assert.Equal(t, 1, engine.OrderBook().BidCount(), "被拒絕的買單進入訂單簿等待") 
+	
+	// 因為觸發了 Cancel Newest 的 STP 機制，買單的 Quantity 被設為 0，所以不應進入訂單簿
+	assert.Equal(t, 0, engine.OrderBook().BidCount(), "被拒絕的買單因 STP 被取消，不進入訂單簿")
 }

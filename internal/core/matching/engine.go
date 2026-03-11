@@ -71,6 +71,8 @@ func (e *Engine) matchBuyOrder(buyOrder *Order) []*Trade {
 
 		// Wash Trade Prevention: 避免左手換右手
 		if buyOrder.UserID == bestAsk.UserID {
+			// 觸發 STP (Cancel Newest)：放棄新訂單剩餘數量，避免發生倒掛 (Crossed Book)
+			buyOrder.Quantity = decimal.Zero
 			break
 		}
 
@@ -129,6 +131,8 @@ func (e *Engine) matchSellOrder(sellOrder *Order) []*Trade {
 
 		// Wash Trade Prevention: 避免左手換右手
 		if sellOrder.UserID == bestBid.UserID {
+			// 觸發 STP (Cancel Newest)：放棄新訂單剩餘數量，避免發生倒掛 (Crossed Book)
+			sellOrder.Quantity = decimal.Zero
 			break
 		}
 
