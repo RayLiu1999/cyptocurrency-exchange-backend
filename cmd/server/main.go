@@ -10,7 +10,8 @@ import (
 
 	"github.com/RayLiu1999/exchange/internal/api"
 	"github.com/RayLiu1999/exchange/internal/core"
-	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/logger" // 使用您自訂的 Logger
+	"github.com/RayLiu1999/exchange/internal/infrastructure/redis"
 	"github.com/RayLiu1999/exchange/internal/middleware"
 	"github.com/RayLiu1999/exchange/internal/repository"
 	"github.com/RayLiu1999/exchange/internal/simulator"
@@ -40,13 +41,28 @@ func main() {
 	// 2. Repository
 	repo := repository.NewPostgresRepository(pool)
 
+	// 2.1 Redis Client 與 Cache Repository
+	redisCfg := redis.DefaultConfig()
+	if redisAddr := os.Getenv("REDIS_URL"); redisAddr != "" {
+		redisCfg.Addr = redisAddr
+	}
+	redisClient, err := redis.NewClient(redisCfg)
+	if err != nil {
+		logger.Log.Warn("Redis 連線失敗，系統將以 Memory Fallback 模式運作", zap.Error(err))
+		// 不 panic，允許系統無 Redis 啟動
+	}
+	var cacheRepo core.CacheRepository
+	if redisClient != nil {
+		cacheRepo = repository.NewRedisCacheRepository(redisClient)
+	}
+
 	// 3. WebSocket Handler (先建立，作為事件監聽者)
 	wsHandler := api.NewWebSocketHandler()
 	go wsHandler.Run()
 	// wsHandler.StartBroadcastingDummyData() // 已移除，改用 Real Data
 
 	// 4. Service (內建撮合引擎，注入 repo 作為所有的 Repository 實現)
-	svc := core.NewExchangeService(repo, repo, repo, repo, repo, "BTC-USD", wsHandler)
+	svc := core.NewExchangeService(repo, repo, repo, repo, repo, "BTC-USD", wsHandler, cacheRepo)
 
 	// 啟動時從資料庫還原未完成的訂單，重建掛單簿
 	if err := svc.RestoreEngineSnapshot(context.Background()); err != nil {
@@ -72,10 +88,22 @@ func main() {
 	}
 	r.Use(cors.New(corsConfig))
 
-	// 初始化限流器（Token Bucket）與冪等性 Store（Memory）
-	publicLimiter := middleware.NewMemoryRateLimiter(1, 60, 10*time.Minute)   // 公共 API：60 次/分鐘/IP
-	privateLimiter := middleware.NewMemoryRateLimiter(10, 10, 10*time.Minute) // 私有 API：10 次/秒/IP
-	idempStore := middleware.NewMemoryIdempotencyStore()
+	// ========== 初始化安全性 Middleware ==========
+	// 若有 Redis 則使用分散式實作；若無則 Fallback 至單機 Memory 實作
+	var publicLimiter, privateLimiter middleware.RateLimiter
+	var idempStore middleware.IdempotencyStore
+
+	if redisClient != nil {
+		publicLimiter = middleware.NewRedisRateLimiter(redisClient, 60, time.Minute)        // 60 次/分鐘
+		privateLimiter = middleware.NewRedisRateLimiter(redisClient, 10, 1*time.Second)     // 10 次/秒
+		idempStore = middleware.NewRedisIdempotencyStore(redisClient)
+		logger.Log.Info("✅ 安全性 Middleware 架構：[分散式 Redis 模式]")
+	} else {
+		publicLimiter = middleware.NewMemoryRateLimiter(1, 60, 10*time.Minute)   // 60 次/分鐘 (Burst: 1)
+		privateLimiter = middleware.NewMemoryRateLimiter(10, 10, 10*time.Minute) // 10 次/秒 (Burst: 10)
+		idempStore = middleware.NewMemoryIdempotencyStore()
+		logger.Log.Warn("⚠️ 安全性 Middleware 架構：[單機 Memory 模式]")
+	}
 
 	// API v1 Routing Group，掛載 5. HTTP Handler
 	handler := api.NewHandler(svc, sim)
