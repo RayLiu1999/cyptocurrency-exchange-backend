@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,10 +15,11 @@ import (
 )
 
 // PlaceOrder 處理下單請求
-// 架構修正：
-// 1. 先進行 DB 事務（鎖定資金、儲存訂單）
-// 2. DB 事務成功後才送入記憶體引擎（避免裂腦問題）
-// 3. 所有成交結算 + Taker 訂單最終更新，封裝在同一個原子事務（Atomic Taker Update）
+// 架構：
+//  1. 第一事務：鎖定資金 + 建立訂單（DB 持久化，確保資金充足後才往下走）
+//  2. 送入記憶體撮合引擎，取得成交列表（Trades）
+//  3. 第二事務（Atomic Settlement）：Taker 與所有 Maker 的訂單統一排序鎖定、
+//     結算資金、寫入成交記錄，避免 Lost Update 與死鎖
 func (s *ExchangeServiceImpl) PlaceOrder(ctx context.Context, order *Order) error {
 	order.Symbol = strings.ToUpper(order.Symbol)
 	order.Price = order.Price.Round(8)
@@ -47,7 +49,7 @@ func (s *ExchangeServiceImpl) PlaceOrder(ctx context.Context, order *Order) erro
 	order.CreatedAt = now
 	order.UpdatedAt = now
 
-	// === 第一個事務: 鎖定資金 + 建立訂單（寫入 DB，確保資金充足）===
+	// === 第一事務: 鎖定資金 + 建立訂單（寫入 DB，確保資金充足）===
 	err = s.txManager.ExecTx(ctx, func(ctx context.Context) error {
 		if err := s.accountRepo.LockFunds(ctx, order.UserID, currencyToLock, amountToLock); err != nil {
 			return fmt.Errorf("餘額不足: %w", err)
@@ -61,88 +63,191 @@ func (s *ExchangeServiceImpl) PlaceOrder(ctx context.Context, order *Order) erro
 		return err
 	}
 
-	// === DB 成功後才送入記憶體引擎（解決 Commit Timing Anomaly/裂腦問題）===
+	// === DB Commit 成功後才送入記憶體引擎（解決 Commit Timing Anomaly / 裂腦問題）===
 	matchOrder := s.convertToMatchingOrder(order)
 	engine := s.engineManager.GetEngine(order.Symbol)
 	trades := engine.Process(matchOrder)
 
-	// 計算 Taker 訂單最終狀態
-	filledQty := decimal.Zero
-	for _, trade := range trades {
-		filledQty = filledQty.Add(trade.Quantity)
-	}
-	order.FilledQuantity = filledQty
+	// 判斷是否需要啟動結算事務：
+	//   1. 有成交紀錄（Taker 吃到了 Maker）
+	//   2. 市價單（即使沒成交也必須退還預扣款，並標記為 Canceled）
+	//   3. 限價單觸發 STP（剩餘數量歸零，沒有進入 OrderBook，必須退還保證金）
+	needsSettlement := len(trades) > 0 || order.Type == TypeMarket || matchOrder.Quantity.IsZero()
 
-	if order.Type == TypeMarket {
-		if order.FilledQuantity.IsZero() {
-			order.Status = StatusCanceled
-		} else {
-			order.Status = StatusFilled
-		}
-	} else {
-		if order.FilledQuantity.Equal(order.Quantity) {
-			order.Status = StatusFilled
-		} else if order.FilledQuantity.GreaterThan(decimal.Zero) {
-			order.Status = StatusPartiallyFilled
-		}
-	}
-
-	// === 第二個事務（Atomic Taker Update）: 所有成交結算 + Taker 訂單更新，封裝在同一個原子操作 ===
+	// === 第二事務（Atomic Settlement）: 所有成交結算 + 訂單更新，封裝在同一個原子操作 ===
 	// 這樣即使中途崩潰，不會出現「成交了但訂單還顯示 NEW」的雙重花費漏洞
-	if len(trades) > 0 || order.Type == TypeMarket {
+	if needsSettlement {
 		err = s.txManager.ExecTx(ctx, func(ctx context.Context) error {
-			// 結算所有成交
+
+			// === Phase 1: 資源標準化排序與獲取 Order 鎖 ===
+			// 把「Taker 自己」與「所有被吃到的 Maker」的 ID 統一放入排序池，
+			// 確保任何並發情境下取鎖順序都一致，徹底杜絕 Orders 表死鎖
+			makerOrderIDsMap := make(map[uuid.UUID]bool)
 			for _, trade := range trades {
-				if err := s.ProcessTrade(ctx, trade, order); err != nil {
-					return fmt.Errorf("處理成交失敗: %w", err)
-				}
+				makerOrderIDsMap[trade.MakerOrderID] = true
+			}
+			makerOrderIDsMap[order.ID] = true // Taker 本身也需要鎖定，防止 Lost Update
+
+			var allOrderIDs []uuid.UUID
+			for id := range makerOrderIDsMap {
+				allOrderIDs = append(allOrderIDs, id)
 			}
 
-			// 市價單退還未成交的保證金
-			if order.Type == TypeMarket {
-				refundCurrency := currencyToLock
-				var refundAmount decimal.Decimal
+			// 依照 UUID 字串字典序排序，確保獲取鎖的順序絕對一致
+			sort.Slice(allOrderIDs, func(i, j int) bool {
+				return allOrderIDs[i].String() < allOrderIDs[j].String()
+			})
 
-				if order.Side == SideBuy {
+			// 依序發出 SELECT ... FOR UPDATE，取得每張訂單的行鎖並讀取最新現況
+			lockedOrders := make(map[uuid.UUID]*Order)
+			for _, id := range allOrderIDs {
+				lockedOrder, err := s.orderRepo.GetOrderForUpdate(ctx, id)
+				if err != nil {
+					return fmt.Errorf("鎖定訂單失敗 (ID: %s): %w", id, err)
+				}
+				lockedOrders[id] = lockedOrder
+			}
+
+			// 從已鎖定的 Map 中提取 Taker 的最新狀態（此時可安全讀取，DB 保證排他性）
+			takerOrder := lockedOrders[order.ID]
+
+			// === Phase 2: 狀態計算、資金聚合 ===
+			allAccountUpdates := make([]AccountUpdate, 0)
+			tradesToSave := make([]*matching.Trade, 0, len(trades))
+
+			for _, trade := range trades {
+				makerOrder := lockedOrders[trade.MakerOrderID]
+
+				// 更新 Maker 訂單的成交數量與狀態
+				makerOrder.FilledQuantity = makerOrder.FilledQuantity.Add(trade.Quantity)
+				if makerOrder.FilledQuantity.Equal(makerOrder.Quantity) {
+					makerOrder.Status = StatusFilled
+				} else if makerOrder.FilledQuantity.GreaterThan(decimal.Zero) {
+					makerOrder.Status = StatusPartiallyFilled
+				}
+				makerOrder.UpdatedAt = time.Now().UnixMilli()
+
+				// 計算這筆成交的資金結算（傳入 takerOrder 取得買賣方身分與限價單單價）
+				updates, err := s.CalculateTradeSettlement(trade, takerOrder, makerOrder)
+				if err != nil {
+					return fmt.Errorf("計算資金結算失敗: %w", err)
+				}
+				allAccountUpdates = append(allAccountUpdates, updates...)
+				tradesToSave = append(tradesToSave, trade)
+
+				// 在 CalculateTradeSettlement 呼叫完畢後，再疊加 Taker 的成交量，
+				// 確保函式接收到的 takerOrder 資料與 DB 原始狀態一致
+				takerOrder.FilledQuantity = takerOrder.FilledQuantity.Add(trade.Quantity)
+			}
+
+			// 根據最終成交數量判斷 Taker 訂單狀態，並計算應退還的保證金
+			var refundAmount decimal.Decimal
+
+			if takerOrder.Type == TypeMarket {
+				// 市價單：全部成交視為 Filled，否則視為 Canceled
+				if takerOrder.FilledQuantity.IsZero() {
+					takerOrder.Status = StatusCanceled
+				} else {
+					takerOrder.Status = StatusFilled
+				}
+				// 退還未花完的預扣款（預扣 105% - 實際花費 = 退款）
+				if takerOrder.Side == SideBuy {
 					totalTradeValue := decimal.Zero
 					for _, trade := range trades {
 						totalTradeValue = totalTradeValue.Add(trade.Price.Mul(trade.Quantity))
 					}
 					refundAmount = amountToLock.Sub(totalTradeValue)
 				} else {
-					refundAmount = order.Quantity.Sub(order.FilledQuantity)
+					refundAmount = takerOrder.Quantity.Sub(takerOrder.FilledQuantity)
 				}
+			} else {
+				// 限價單：依成交比例判斷狀態
+				if takerOrder.FilledQuantity.Equal(takerOrder.Quantity) {
+					takerOrder.Status = StatusFilled
+				} else if matchOrder.Quantity.IsZero() {
+					// STP 觸發：引擎將剩餘量歸零，沒有進入 OrderBook，視為已取消
+					takerOrder.Status = StatusCanceled
+					canceledQty := takerOrder.Quantity.Sub(takerOrder.FilledQuantity)
+					if takerOrder.Side == SideBuy {
+						refundAmount = canceledQty.Mul(takerOrder.Price)
+					} else {
+						refundAmount = canceledQty
+					}
+				} else if takerOrder.FilledQuantity.GreaterThan(decimal.Zero) {
+					takerOrder.Status = StatusPartiallyFilled
+				}
+			}
 
-				refundAmount = refundAmount.Round(8)
-				if refundAmount.GreaterThan(decimal.Zero) {
-					if err := s.accountRepo.UnlockFunds(ctx, order.UserID, refundCurrency, refundAmount); err != nil {
-						return fmt.Errorf("解鎖市價單剩餘資金失敗: %w", err)
+			// 將保證金退款加入帳戶更新陣列
+			if refundAmount.GreaterThan(decimal.Zero) {
+				allAccountUpdates = append(allAccountUpdates, AccountUpdate{
+					UserID:   takerOrder.UserID,
+					Currency: currencyToLock,
+					Unlock:   refundAmount.Round(8),
+				})
+			}
+
+			// === Phase 3: 依序執行 Database 寫入 ===
+
+			// 1. 更新所有訂單狀態（Maker + Taker，依照排序好的 ID 順序）
+			for _, id := range allOrderIDs {
+				orderToSave := lockedOrders[id]
+				orderToSave.UpdatedAt = time.Now().UnixMilli()
+				if err := s.orderRepo.UpdateOrder(ctx, orderToSave); err != nil {
+					return fmt.Errorf("更新訂單狀態失敗 (ID: %s): %w", id, err)
+				}
+				if s.tradeListener != nil {
+					s.tradeListener.OnOrderUpdate(orderToSave)
+				}
+			}
+
+			// 2. 儲存所有成交記錄
+			for _, trade := range tradesToSave {
+				if err := s.tradeRepo.CreateTrade(ctx, trade); err != nil {
+					return fmt.Errorf("建立成交記錄失敗: %w", err)
+				}
+				if s.tradeListener != nil {
+					s.tradeListener.OnTrade(trade)
+				}
+			}
+
+			// 3. 聚合並排序資金變更後統一更新帳戶
+			aggregatedUpdates := AggregateAndSortAccountUpdates(allAccountUpdates)
+			for _, up := range aggregatedUpdates {
+				if up.Unlock.GreaterThan(decimal.Zero) {
+					if err := s.accountRepo.UnlockFunds(ctx, up.UserID, up.Currency, up.Unlock); err != nil {
+						return fmt.Errorf("解鎖資金失敗 (%s %s): %w", up.UserID, up.Currency, err)
+					}
+				}
+				if !up.Amount.IsZero() {
+					if err := s.accountRepo.UpdateBalance(ctx, up.UserID, up.Currency, up.Amount); err != nil {
+						return fmt.Errorf("更新餘額失敗 (%s %s): %w", up.UserID, up.Currency, err)
 					}
 				}
 			}
 
-			// Taker 訂單最終狀態更新（與結算在同一事務）
-			order.UpdatedAt = time.Now().UnixMilli()
-			if err := s.orderRepo.UpdateOrder(ctx, order); err != nil {
-				return fmt.Errorf("更新 Taker 訂單狀態失敗: %w", err)
-			}
+			// 將鎖定後讀取到的最新狀態回寫給外層 order 指標，供後續推播使用
+			*order = *takerOrder
 
 			return nil
 		})
+
 		if err != nil {
 			log.Printf("原子結算事務失敗: %v", err)
 		}
 	} else {
-		// 無成交：只更新訂單時間戳
+		// 無成交：限價單進入 OrderBook 排隊，只更新時間戳並通知前端
 		order.UpdatedAt = time.Now().UnixMilli()
 		if err := s.orderRepo.UpdateOrder(ctx, order); err != nil {
-			log.Printf("更新訂單狀態失敗: %v", err)
+			log.Printf("更新訂單時間戳失敗: %v", err)
+		}
+		if s.tradeListener != nil {
+			s.tradeListener.OnOrderUpdate(order)
 		}
 	}
 
+	// 掛單簿已變更（新增/成交），推播最新深度給所有連線客戶端
 	if s.tradeListener != nil {
-		s.tradeListener.OnOrderUpdate(order)
-		// 掛單簿已變更（新增/成交），推播最新深度
 		snapshot := engine.GetOrderBookSnapshot(20)
 		s.tradeListener.OnOrderBookUpdate(snapshot)
 	}

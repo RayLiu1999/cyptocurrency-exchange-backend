@@ -6,7 +6,6 @@ import (
 	"log"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/RayLiu1999/exchange/internal/core/matching"
 	"github.com/google/uuid"
@@ -22,6 +21,69 @@ type ExchangeServiceImpl struct {
 	tradeListener TradeEventListener
 	txManager     DBTransaction
 	engineManager *matching.EngineManager
+}
+
+// AccountUpdate 資金變更紀錄
+type AccountUpdate struct {
+	UserID   uuid.UUID
+	Currency string
+	Amount   decimal.Decimal
+	Unlock   decimal.Decimal
+}
+
+// AggregateAndSortAccountUpdates 聚合並排序資金變更
+// 定義函式：接收一組原始的 AccountUpdate 陣列，回傳處理過（合併且排序）的新陣列
+func AggregateAndSortAccountUpdates(updates []AccountUpdate) []AccountUpdate {
+
+	// --- 第一階段：聚合 (Aggregation) ---
+
+	// 建立一個 Map，用「使用者ID+幣種」當作 Key，目的是合併同一個人在同一個幣種的多筆變動
+	aggMap := make(map[string]*AccountUpdate)
+
+	for _, up := range updates {
+		// 產生唯一的 Key，例如："user1_BTC"
+		key := up.UserID.String() + "_" + up.Currency
+
+		if existing, ok := aggMap[key]; ok {
+			// 如果這個 Key 已經在 Map 裡了，就把數值疊加進去
+			// 使用 decimal.Add 確保金額計算精準，不丟失精度
+			existing.Amount = existing.Amount.Add(up.Amount) // 餘額變動
+			existing.Unlock = existing.Unlock.Add(up.Unlock) // 解鎖金額
+		} else {
+			// 如果是第一次遇到這個人跟幣種，就建立一個新紀錄
+			// 這裡做一次 copyUp = up 是為了避免指標指向同一個原始物件
+			copyUp := up
+			aggMap[key] = &copyUp
+		}
+	}
+
+	// --- 第二階段：過濾與轉換 (Filtering) ---
+
+	// 將 Map 轉回為 Slice (陣列)，方便後續排序
+	var result []AccountUpdate
+	for _, ptr := range aggMap {
+		// 關鍵優化：如果加總後的變動是 0 (既沒有餘額變動，也沒有解鎖操作)
+		// 則這筆資料不需要寫入資料庫，直接過濾掉，減少 DB IO 壓力
+		if !ptr.Amount.IsZero() || !ptr.Unlock.IsZero() {
+			result = append(result, *ptr)
+		}
+	}
+
+	// --- 第三階段：排序 (Sorting) ---
+
+	// 這是防死鎖最重要的一步 (Two-Phase Locking)
+	// 無論是誰發起的交易，所有人的帳戶更新順序在這裡被強行統一
+	sort.Slice(result, func(i, j int) bool {
+		// 先比較 UserID 的字串大小
+		if result[i].UserID.String() != result[j].UserID.String() {
+			return result[i].UserID.String() < result[j].UserID.String()
+		}
+		// 如果是同一個人，再比較幣種名稱 (例如: BTC < USDT)
+		return result[i].Currency < result[j].Currency
+	})
+
+	// 回傳最終可用於執行 SQL 更新的列表
+	return result
 }
 
 // NewExchangeService 建立交易所服務
@@ -75,58 +137,8 @@ func (s *ExchangeServiceImpl) RestoreEngineSnapshot(ctx context.Context) error {
 	return nil
 }
 
-// ProcessTrade 處理成交結果，必須在事務內呼叫
-func (s *ExchangeServiceImpl) ProcessTrade(ctx context.Context, trade *matching.Trade, takerOrder *Order) error {
-	log.Printf("成交: 價格=%s, 數量=%s, Maker=%s, Taker=%s",
-		trade.Price, trade.Quantity, trade.MakerOrderID, trade.TakerOrderID)
-
-	// 1. 使用 FOR UPDATE 鎖取得 Maker 訂單，防止 CancelOrder 競態條件
-	makerOrder, err := s.orderRepo.GetOrderForUpdate(ctx, trade.MakerOrderID)
-	if err != nil {
-		return fmt.Errorf("取得 Maker 訂單失敗: %w", err)
-	}
-
-	// 2. 更新 Maker filled_quantity
-	makerOrder.FilledQuantity = makerOrder.FilledQuantity.Add(trade.Quantity)
-
-	// 3. 更新 Maker 狀態
-	if makerOrder.FilledQuantity.Equal(makerOrder.Quantity) {
-		makerOrder.Status = StatusFilled
-	} else if makerOrder.FilledQuantity.GreaterThan(decimal.Zero) {
-		makerOrder.Status = StatusPartiallyFilled
-	}
-
-	makerOrder.UpdatedAt = time.Now().UnixMilli()
-
-	// 4. 儲存 Maker 訂單（確保 FilledQuantity 以當次 Delta 累加已在上方計算）
-	if err := s.orderRepo.UpdateOrder(ctx, makerOrder); err != nil {
-		return fmt.Errorf("更新 Maker 訂單失敗: %w", err)
-	}
-
-	if s.tradeListener != nil {
-		s.tradeListener.OnOrderUpdate(makerOrder)
-	}
-
-	// 5. 結算資金
-	if err := s.SettleTrade(ctx, trade, takerOrder, makerOrder); err != nil {
-		return fmt.Errorf("結算失敗: %w", err)
-	}
-
-	// 6. 儲存成交記錄
-	if err := s.tradeRepo.CreateTrade(ctx, trade); err != nil {
-		return fmt.Errorf("建立成交記錄失敗: %w", err)
-	}
-
-	// 7. 發送成交事件
-	if s.tradeListener != nil {
-		s.tradeListener.OnTrade(trade)
-	}
-
-	return nil
-}
-
-// SettleTrade 結算資金
-func (s *ExchangeServiceImpl) SettleTrade(ctx context.Context, trade *matching.Trade, takerOrder, makerOrder *Order) error {
+// CalculateTradeSettlement 計算單筆成交的資金變動
+func (s *ExchangeServiceImpl) CalculateTradeSettlement(trade *matching.Trade, takerOrder, makerOrder *Order) ([]AccountUpdate, error) {
 	tradeValue := trade.Price.Mul(trade.Quantity)
 
 	var buyer, seller *Order
@@ -140,7 +152,7 @@ func (s *ExchangeServiceImpl) SettleTrade(ctx context.Context, trade *matching.T
 
 	base, quote, err := s.splitSymbol(takerOrder.Symbol)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// 計算買方解鎖金額
@@ -157,41 +169,14 @@ func (s *ExchangeServiceImpl) SettleTrade(ctx context.Context, trade *matching.T
 	tradeValue = tradeValue.Round(8)
 	tradeQty := trade.Quantity.Round(8)
 
-	type accountUpdate struct {
-		userID   uuid.UUID
-		currency string
-		amount   decimal.Decimal
-		unlock   decimal.Decimal
+	updates := []AccountUpdate{
+		{UserID: buyer.UserID, Currency: quote, Amount: tradeValue.Neg(), Unlock: buyerUnlockAmount},
+		{UserID: buyer.UserID, Currency: base, Amount: tradeQty, Unlock: decimal.Zero},
+		{UserID: seller.UserID, Currency: base, Amount: tradeQty.Neg(), Unlock: tradeQty},
+		{UserID: seller.UserID, Currency: quote, Amount: tradeValue, Unlock: decimal.Zero},
 	}
 
-	updates := []accountUpdate{
-		{userID: buyer.UserID, currency: quote, amount: tradeValue.Neg(), unlock: buyerUnlockAmount},
-		{userID: buyer.UserID, currency: base, amount: tradeQty, unlock: decimal.Zero},
-		{userID: seller.UserID, currency: base, amount: tradeQty.Neg(), unlock: tradeQty},
-		{userID: seller.UserID, currency: quote, amount: tradeValue, unlock: decimal.Zero},
-	}
-
-	sort.Slice(updates, func(i, j int) bool {
-		if updates[i].userID.String() != updates[j].userID.String() {
-			return updates[i].userID.String() < updates[j].userID.String()
-		}
-		return updates[i].currency < updates[j].currency
-	})
-
-	for _, up := range updates {
-		if up.unlock.GreaterThan(decimal.Zero) {
-			if err := s.accountRepo.UnlockFunds(ctx, up.userID, up.currency, up.unlock); err != nil {
-				return fmt.Errorf("解鎖用戶 %s 的 %s 失敗: %w", up.userID, up.currency, err)
-			}
-		}
-		if !up.amount.IsZero() {
-			if err := s.accountRepo.UpdateBalance(ctx, up.userID, up.currency, up.amount); err != nil {
-				return fmt.Errorf("更新用戶 %s 的 %s 餘額失敗: %w", up.userID, up.currency, err)
-			}
-		}
-	}
-
-	return nil
+	return updates, nil
 }
 
 // splitSymbol 將交易對拆分成 base 和 quote

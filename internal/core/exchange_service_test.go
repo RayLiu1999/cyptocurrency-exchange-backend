@@ -9,124 +9,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 )
 
 // ============================================================
-// Step 1: Maker 訂單狀態更新
+// Step 1: 資金結算計算
 // ============================================================
 
-func TestProcessTrade_MakerFilledQuantityIncreases(t *testing.T) {
+func TestCalculateTradeSettlement_BuyerReceivesBTC(t *testing.T) {
 	// Arrange
-	ctx := context.Background()
-	orderRepo := NewMockOrderRepository()
-	accountRepo := NewMockAccountRepository()
-	tradeRepo := NewMockTradeRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil)
-
-	makerOrderID := uuid.New()
-	makerOrder := &Order{
-		ID:             makerOrderID,
-		UserID:         uuid.New(),
-		Symbol:         "BTC-USD",
-		Side:           SideSell,
-		Price:          decimal.NewFromInt(50000),
-		Quantity:       decimal.NewFromInt(10),
-		FilledQuantity: decimal.Zero,
-		Status:         StatusNew,
-	}
-
-	trade := &matching.Trade{
-		ID:           uuid.New(),
-		MakerOrderID: makerOrderID,
-		TakerOrderID: uuid.New(),
-		Price:        decimal.NewFromInt(50000),
-		Quantity:     decimal.NewFromInt(3),
-	}
-
-	takerOrder := &Order{
-		ID:     trade.TakerOrderID,
-		UserID: uuid.New(),
-		Symbol: "BTC-USD",
-		Side:   SideBuy,
-	}
-
-	// Mock expectations
-	orderRepo.On("GetOrderForUpdate", ctx, makerOrderID).Return(makerOrder, nil)
-	orderRepo.On("UpdateOrder", ctx, mock.AnythingOfType("*core.Order")).Return(nil)
-	accountRepo.On("UnlockFunds", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	accountRepo.On("UpdateBalance", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	tradeRepo.On("CreateTrade", ctx, trade).Return(nil)
-
-	// Act
-	err := svc.ProcessTrade(ctx, trade, takerOrder)
-
-	// Assert
-	assert.NoError(t, err)
-	assert.Equal(t, decimal.NewFromInt(3), makerOrder.FilledQuantity, "Maker filled_quantity 應增加 3")
-}
-
-func TestProcessTrade_MakerStatusUpdated(t *testing.T) {
-	// Arrange
-	ctx := context.Background()
-	orderRepo := NewMockOrderRepository()
-	accountRepo := NewMockAccountRepository()
-	tradeRepo := NewMockTradeRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil)
-
-	makerOrderID := uuid.New()
-	makerOrder := &Order{
-		ID:             makerOrderID,
-		UserID:         uuid.New(),
-		Symbol:         "BTC-USD",
-		Side:           SideSell,
-		Price:          decimal.NewFromInt(50000),
-		Quantity:       decimal.NewFromInt(10),
-		FilledQuantity: decimal.NewFromInt(7), // 已成交 7，再成交 3 就完全成交
-		Status:         StatusPartiallyFilled,
-	}
-
-	trade := &matching.Trade{
-		ID:           uuid.New(),
-		MakerOrderID: makerOrderID,
-		TakerOrderID: uuid.New(),
-		Price:        decimal.NewFromInt(50000),
-		Quantity:     decimal.NewFromInt(3), // 成交 3，總共 10，完全成交
-	}
-
-	takerOrder := &Order{
-		ID:     trade.TakerOrderID,
-		UserID: uuid.New(),
-		Symbol: "BTC-USD",
-		Side:   SideBuy,
-	}
-
-	// Mock expectations
-	orderRepo.On("GetOrderForUpdate", ctx, makerOrderID).Return(makerOrder, nil)
-	orderRepo.On("UpdateOrder", ctx, mock.AnythingOfType("*core.Order")).Return(nil)
-	accountRepo.On("UnlockFunds", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	accountRepo.On("UpdateBalance", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	tradeRepo.On("CreateTrade", ctx, trade).Return(nil)
-
-	// Act
-	err := svc.ProcessTrade(ctx, trade, takerOrder)
-
-	// Assert
-	assert.NoError(t, err)
-	assert.Equal(t, StatusFilled, makerOrder.Status, "Maker 完全成交後狀態應為 FILLED")
-}
-
-// ============================================================
-// Step 2: 資金結算邏輯
-// ============================================================
-
-func TestSettleTrade_BuyerUnlocksUSDAndReceivesBTC(t *testing.T) {
-	// Arrange
-	ctx := context.Background()
-	orderRepo := NewMockOrderRepository()
-	accountRepo := NewMockAccountRepository()
-	tradeRepo := NewMockTradeRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil)
+	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", nil)
 
 	takerOrder := &Order{
 		ID:     uuid.New(),
@@ -149,26 +40,39 @@ func TestSettleTrade_BuyerUnlocksUSDAndReceivesBTC(t *testing.T) {
 		Quantity:     decimal.NewFromFloat(0.5), // 成交 0.5 BTC = 25000 USD
 	}
 
-	accountRepo.On("UnlockFunds", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	accountRepo.On("UpdateBalance", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-
 	// Act
-	err := svc.SettleTrade(ctx, trade, takerOrder, makerOrder)
+	updates, err := svc.CalculateTradeSettlement(trade, takerOrder, makerOrder)
 
 	// Assert
 	assert.NoError(t, err)
-	// 驗證呼叫了 2 次 UnlockFunds (買方 1 次 + 賣方 1 次)
-	accountRepo.AssertNumberOfCalls(t, "UnlockFunds", 2)
-	accountRepo.AssertNumberOfCalls(t, "UpdateBalance", 4)
+	assert.Len(t, updates, 4)
+
+	// 檢查買方解鎖與獲得資金
+	assert.Equal(t, takerOrder.UserID, updates[0].UserID)
+	assert.Equal(t, "USD", updates[0].Currency)
+	assert.True(t, updates[0].Amount.Equal(decimal.NewFromInt(-25000)))
+	assert.True(t, updates[0].Unlock.Equal(decimal.NewFromInt(25000)))
+
+	assert.Equal(t, takerOrder.UserID, updates[1].UserID)
+	assert.Equal(t, "BTC", updates[1].Currency)
+	assert.True(t, updates[1].Amount.Equal(decimal.NewFromFloat(0.5)))
+	assert.True(t, updates[1].Unlock.Equal(decimal.Zero))
+
+	// 檢查賣方解鎖與獲得資金
+	assert.Equal(t, makerOrder.UserID, updates[2].UserID)
+	assert.Equal(t, "BTC", updates[2].Currency)
+	assert.True(t, updates[2].Amount.Equal(decimal.NewFromFloat(-0.5)))
+	assert.True(t, updates[2].Unlock.Equal(decimal.NewFromFloat(0.5)))
+
+	assert.Equal(t, makerOrder.UserID, updates[3].UserID)
+	assert.Equal(t, "USD", updates[3].Currency)
+	assert.True(t, updates[3].Amount.Equal(decimal.NewFromInt(25000)))
+	assert.True(t, updates[3].Unlock.Equal(decimal.Zero))
 }
 
-func TestSettleTrade_SellerUnlocksBTCAndReceivesUSD(t *testing.T) {
+func TestCalculateTradeSettlement_SellerReceivesUSD(t *testing.T) {
 	// Arrange
-	ctx := context.Background()
-	orderRepo := NewMockOrderRepository()
-	accountRepo := NewMockAccountRepository()
-	tradeRepo := NewMockTradeRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil)
+	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", nil)
 
 	takerOrder := &Order{
 		ID:     uuid.New(),
@@ -191,71 +95,57 @@ func TestSettleTrade_SellerUnlocksBTCAndReceivesUSD(t *testing.T) {
 		Quantity:     decimal.NewFromFloat(1), // 成交 1 BTC = 50000 USD
 	}
 
-	accountRepo.On("UnlockFunds", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	accountRepo.On("UpdateBalance", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-
 	// Act
-	err := svc.SettleTrade(ctx, trade, takerOrder, makerOrder)
+	updates, err := svc.CalculateTradeSettlement(trade, takerOrder, makerOrder)
 
 	// Assert
 	assert.NoError(t, err)
-	accountRepo.AssertNumberOfCalls(t, "UnlockFunds", 2)
-	accountRepo.AssertNumberOfCalls(t, "UpdateBalance", 4)
+	assert.Len(t, updates, 4)
 }
 
 // ============================================================
-// Phase 3: 成交步驟失敗場景 & 快照恢復
+// Step 2: 聚合與排序測試
 // ============================================================
+func TestAggregateAndSortAccountUpdates(t *testing.T) {
+	userA := uuid.New()
+	userB := uuid.New()
 
-func TestProcessTrade_StepFails_TransactionRollsBack(t *testing.T) {
-	// Arrange：GetOrderForUpdate 成功，但 UpdateOrder 失敗，後續步驟不應被執行
-	ctx := context.Background()
-	orderRepo := NewMockOrderRepository()
-	accountRepo := NewMockAccountRepository()
-	tradeRepo := NewMockTradeRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil)
-
-	makerOrderID := uuid.New()
-	makerOrder := &Order{
-		ID:             makerOrderID,
-		UserID:         uuid.New(),
-		Symbol:         "BTC-USD",
-		Side:           SideSell,
-		Price:          decimal.NewFromInt(50000),
-		Quantity:       decimal.NewFromInt(10),
-		FilledQuantity: decimal.Zero,
-		Status:         StatusNew,
+	// 若 userA > userB, 交換以保證字母順序
+	if userA.String() > userB.String() {
+		userA, userB = userB, userA
 	}
 
-	trade := &matching.Trade{
-		ID:           uuid.New(),
-		MakerOrderID: makerOrderID,
-		TakerOrderID: uuid.New(),
-		Price:        decimal.NewFromInt(50000),
-		Quantity:     decimal.NewFromInt(3),
+	updates := []AccountUpdate{
+		{UserID: userB, Currency: "BTC", Amount: decimal.NewFromFloat(1), Unlock: decimal.Zero},
+		{UserID: userA, Currency: "USD", Amount: decimal.NewFromInt(100), Unlock: decimal.NewFromInt(100)},
+		{UserID: userB, Currency: "BTC", Amount: decimal.NewFromFloat(2), Unlock: decimal.Zero},
+		{UserID: userA, Currency: "USD", Amount: decimal.NewFromInt(-50), Unlock: decimal.Zero},
+		{UserID: userA, Currency: "BTC", Amount: decimal.NewFromFloat(1), Unlock: decimal.NewFromFloat(0.5)},
 	}
 
-	takerOrder := &Order{
-		ID:     trade.TakerOrderID,
-		UserID: uuid.New(),
-		Symbol: "BTC-USD",
-		Side:   SideBuy,
-	}
+	res := AggregateAndSortAccountUpdates(updates)
 
-	// GetOrderForUpdate 成功，UpdateOrder 模擬寫入失敗
-	orderRepo.On("GetOrderForUpdate", ctx, makerOrderID).Return(makerOrder, nil)
-	orderRepo.On("UpdateOrder", ctx, mock.AnythingOfType("*core.Order")).Return(fmt.Errorf("DB 更新失敗：死鎖"))
+	// Order should be:
+	// UserA BTC: Amount 1, Unlock 0.5
+	// UserA USD: Amount 50, Unlock 100
+	// UserB BTC: Amount 3, Unlock 0
 
-	// Act
-	err := svc.ProcessTrade(ctx, trade, takerOrder)
+	assert.Len(t, res, 3)
 
-	// Assert：ProcessTrade 應傳回錯誤
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "更新 Maker 訂單失敗")
-	// 驗證後續步驟（資金結算、成交記錄寫入）均未被呼叫
-	// 在真實 DB 事務中，這些未執行的步驟代表 ROLLBACK 可保證原子性
-	accountRepo.AssertNotCalled(t, "UnlockFunds", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-	tradeRepo.AssertNotCalled(t, "CreateTrade", mock.Anything, mock.Anything)
+	assert.Equal(t, userA, res[0].UserID)
+	assert.Equal(t, "BTC", res[0].Currency)
+	assert.True(t, res[0].Amount.Equal(decimal.NewFromFloat(1)))
+	assert.True(t, res[0].Unlock.Equal(decimal.NewFromFloat(0.5)))
+
+	assert.Equal(t, userA, res[1].UserID)
+	assert.Equal(t, "USD", res[1].Currency)
+	assert.True(t, res[1].Amount.Equal(decimal.NewFromInt(50)))
+	assert.True(t, res[1].Unlock.Equal(decimal.NewFromInt(100)))
+
+	assert.Equal(t, userB, res[2].UserID)
+	assert.Equal(t, "BTC", res[2].Currency)
+	assert.True(t, res[2].Amount.Equal(decimal.NewFromFloat(3)))
+	assert.True(t, res[2].Unlock.Equal(decimal.Zero))
 }
 
 func TestRestoreEngineSnapshot_Success_RebuildsActiveOrders(t *testing.T) {
