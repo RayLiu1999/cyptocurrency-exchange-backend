@@ -125,6 +125,7 @@ func (h *Handler) GetOrders(c *gin.Context) {
 			"id":              order.ID,
 			"symbol":          order.Symbol,
 			"side":            core.SideToString(order.Side),
+			"type":            core.TypeToString(order.Type),
 			"status":          core.StatusToString(order.Status),
 			"price":           order.Price,
 			"quantity":        order.Quantity,
