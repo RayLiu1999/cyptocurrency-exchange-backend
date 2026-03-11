@@ -8,6 +8,7 @@ DB_NAME=exchange
 DB_USER=postgres
 DB_PASSWORD=123qwe
 DB_PORT=5432
+REDIS_URL=redis://:123qwe@localhost:6379
 
 help: ## 顯示所有可用指令
 	@echo "可用指令:"
@@ -21,6 +22,7 @@ build: ## 編譯專案
 run: ## 啟動伺服器 (需先啟動資料庫)
 	@echo "🚀 啟動伺服器..."
 	DATABASE_URL="postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable" \
+	REDIS_URL="$(REDIS_URL)" \
 	go run cmd/server/main.go
 
 test: ## 執行單元測試
@@ -30,21 +32,25 @@ test: ## 執行單元測試
 integration-test: ## 執行 PostgreSQL 整合測試（需資料庫連線）
 	@echo "🔌 執行 PostgreSQL 整合測試..."
 	DATABASE_URL="postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable" \
+	REDIS_URL="$(REDIS_URL)" \
 	go test -v -tags=integration ./internal/repository/ -timeout 60s
 
 e2e-test: ## 執行端對端整合測試（Service + Repository + Matching，需資料庫連線）
 	@echo "🔗 執行端對端整合測試..."
 	DATABASE_URL="postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable" \
+	REDIS_URL="$(REDIS_URL)" \
 	go test -v -tags=integration ./internal/core/ -run TestE2E -timeout 60s
 
 concurrency-test: ## 執行高併發與競態條件測試（需資料庫連線）
 	@echo "⚡ 執行高併發競態測試..."
 	DATABASE_URL="postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable" \
+	REDIS_URL="$(REDIS_URL)" \
 	go test -v -tags=integration ./internal/core/ -run TestConcurrency -timeout 120s
 
 race-test: ## 執行含 race detector 的競態條件測試（需資料庫連線）
 	@echo "🏁 執行 Race Detector 競態測試..."
 	DATABASE_URL="postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable" \
+	REDIS_URL="$(REDIS_URL)" \
 	go test -v -race -tags=integration ./internal/core/ -run TestConcurrency -timeout 120s
 
 smoke-test: ## 執行 k6 冒煙測試（核心交易流程）
