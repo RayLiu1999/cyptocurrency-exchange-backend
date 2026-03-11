@@ -10,9 +10,9 @@ import (
 
 // idempotencyEntry 冪等性快取條目
 type idempotencyEntry struct {
-	statusCode int
-	body       []byte // 儲存原始 JSON bytes，避免反序列化成本與空 body 問題
-	expiresAt  time.Time
+	StatusCode int       `json:"status_code"`
+	Body       []byte    `json:"body"` // 儲存原始 JSON bytes
+	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 // IdempotencyStore 冪等性儲存介面（單體用 Memory，未來換 Redis SET NX）
@@ -44,7 +44,7 @@ func (s *memoryIdempotencyStore) Get(key string) *idempotencyEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	entry, ok := s.store[key]
-	if !ok || time.Now().After(entry.expiresAt) {
+	if !ok || time.Now().After(entry.ExpiresAt) {
 		return nil
 	}
 	return entry
@@ -58,9 +58,9 @@ func (s *memoryIdempotencyStore) Set(key string, statusCode int, body []byte, tt
 	bodyCopy := make([]byte, len(body))
 	copy(bodyCopy, body)
 	s.store[key] = &idempotencyEntry{
-		statusCode: statusCode,
-		body:       bodyCopy,
-		expiresAt:  time.Now().Add(ttl),
+		StatusCode: statusCode,
+		Body:       bodyCopy,
+		ExpiresAt:  time.Now().Add(ttl),
 	}
 }
 
@@ -72,7 +72,7 @@ func (s *memoryIdempotencyStore) cleanupLoop() {
 		s.mu.Lock()
 		now := time.Now()
 		for key, entry := range s.store {
-			if now.After(entry.expiresAt) {
+			if now.After(entry.ExpiresAt) {
 				delete(s.store, key)
 			}
 		}
@@ -93,7 +93,7 @@ func IdempotencyMiddleware(store IdempotencyStore, ttl time.Duration) gin.Handle
 
 		// Cache Hit：直接用 c.Data 回傳儲存好的原始 JSON bytes，不觸發任何業務邏輯
 		if entry := store.Get(key); entry != nil {
-			c.Data(entry.statusCode, "application/json", entry.body)
+			c.Data(entry.StatusCode, "application/json", entry.Body)
 			c.Abort()
 			return
 		}
