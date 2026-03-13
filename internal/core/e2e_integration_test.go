@@ -44,7 +44,7 @@ func setupE2EDB(t *testing.T) *repository.PostgresRepository {
 // setupE2EService 建立完整服務堆疊（真實資料庫 + 真實撮合引擎）
 // 每個呼叫都會產生一個獨立的 EngineManager，適合用於模擬重啟場景
 func setupE2EService(repo *repository.PostgresRepository) *core.ExchangeServiceImpl {
-	return core.NewExchangeService(repo, repo, repo, repo, repo, "BTC-USD", nil)
+	return core.NewExchangeService(repo, repo, repo, repo, repo, "BTC-USD", nil, nil, nil)
 }
 
 // e2eUser 代表一個在測試中使用的用戶（含 BTC 與 USD 帳戶）
@@ -344,7 +344,7 @@ func TestE2E_RestoreEngineSnapshot_RebuildFromDB(t *testing.T) {
 	const testSymbol = "E2E-USD"
 
 	// 第一個 service 實例（模擬首次啟動）
-	svc1 := core.NewExchangeService(repo, repo, repo, repo, repo, testSymbol, nil)
+	svc1 := core.NewExchangeService(repo, repo, repo, repo, repo, testSymbol, nil, nil, nil)
 
 	// 掛入兩筆價格不相交的訂單（買 $49,000 vs 賣 $51,000，不會互相撮合）
 	// testSymbol "E2E-USD"：base="E2E"，quote="USD"
@@ -403,7 +403,7 @@ func TestE2E_RestoreEngineSnapshot_RebuildFromDB(t *testing.T) {
 	assert.Len(t, snapshot1.Asks, 1, "首次啟動應有 1 筆掛賣單")
 
 	// === 模擬重啟：建立第二個 service 實例，記憶體引擎為空 ===
-	svc2 := core.NewExchangeService(repo, repo, repo, repo, repo, testSymbol, nil)
+	svc2 := core.NewExchangeService(repo, repo, repo, repo, repo, testSymbol, nil, nil, nil)
 
 	// 重啟後引擎應為空（未呼叫 RestoreEngineSnapshot 前）
 	snapshot2Before, err := svc2.GetOrderBook(ctx, testSymbol)
