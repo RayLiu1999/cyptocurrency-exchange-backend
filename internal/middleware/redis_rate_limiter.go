@@ -6,7 +6,20 @@ import (
 	"time"
 
 	"github.com/RayLiu1999/exchange/internal/infrastructure/redis"
+	redisclient "github.com/redis/go-redis/v9"
 )
+
+// 預先編譯 Lua Script 保證原子性，避免 TTL 被反覆重置的問題
+var rateLimitScript = redisclient.NewScript(`
+	local current = redis.call("INCR", KEYS[1])
+	if current == 1 then
+		redis.call("EXPIRE", KEYS[1], ARGV[1])
+	end
+	if current > tonumber(ARGV[2]) then
+		return 0
+	end
+	return 1
+`)
 
 // RedisRateLimiter 實作分散式 Redis 的限流器 (Fixed Window 演算法)
 type RedisRateLimiter struct {
@@ -26,21 +39,18 @@ func NewRedisRateLimiter(client *redis.Client, limit int, window time.Duration) 
 
 // Allow 判斷此 IP 的請求是否被允許
 func (r *RedisRateLimiter) Allow(ip string) bool {
-	ctx := context.Background()
+	// 加上 Timeout 防護，避免 Redis 網路異常卡死 API
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	key := fmt.Sprintf("exchange:ratelimit:%s", ip)
 
-	// 使用 Pipeline 來保證原子性並減少網路來回
-	pipe := r.client.Client.Pipeline()
-	incr := pipe.Incr(ctx, key)
-	pipe.Expire(ctx, key, r.window) // 覆蓋 TTL 為視窗時間
-
-	_, err := pipe.Exec(ctx)
+	// 執行 Lua Script
+	res, err := rateLimitScript.Run(ctx, r.client.Client, []string{key}, int(r.window.Seconds()), r.limit).Int()
 	if err != nil {
 		// 若 Redis 異常，選擇 Fail-Open (放行請求)
-		// 避免 Redis 當機導致首頁進不去，可自行依據業務重要性改為 Fail-Close
 		return true
 	}
 
-	count := incr.Val()
-	return count <= int64(r.limit)
+	return res == 1
 }
