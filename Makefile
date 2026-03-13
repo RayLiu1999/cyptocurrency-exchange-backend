@@ -1,4 +1,4 @@
-.PHONY: build run test integration-test e2e-test concurrency-test race-test smoke-test clean db-up db-down db-migrate help
+.PHONY: build run test integration-test e2e-test concurrency-test race-test smoke-test clean up down logs db-up db-down db-migrate help
 
 # 變數定義
 APP_NAME=exchange-server
@@ -9,6 +9,7 @@ DB_USER=postgres
 DB_PASSWORD=123qwe
 DB_PORT=5432
 REDIS_URL=redis://:123qwe@localhost:6379
+KAFKA_BROKERS=localhost:9092
 
 help: ## 顯示所有可用指令
 	@echo "可用指令:"
@@ -19,10 +20,11 @@ build: ## 編譯專案
 	go build -o $(BUILD_DIR)/server cmd/server/main.go
 	@echo "✅ 編譯完成: ./server"
 
-run: ## 啟動伺服器 (需先啟動資料庫)
+run: ## 啟動伺服器 (需先啟動資料庫與 Kafka)
 	@echo "🚀 啟動伺服器..."
 	DATABASE_URL="postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable" \
 	REDIS_URL="$(REDIS_URL)" \
+	KAFKA_BROKERS="$(KAFKA_BROKERS)" \
 	go run cmd/server/main.go
 
 test: ## 執行單元測試
@@ -81,6 +83,17 @@ db-fresh: ## 快速清空並重建資料庫表結構
 
 db-refresh: db-fresh db-seed ## 快速重建表結構並寫入假資料 (類似 Laravel migrate:refresh --seed)
 	@echo "✅ 資料庫重建與測試資料寫入完成"
+
+up: ## 啟動所有基礎設施 (Postgres, Redis, Kafka)
+	@echo "🐳 啟動 Docker 容器..."
+	docker compose up -d
+
+down: ## 停止並刪除所有基礎設施
+	@echo "🛑 停止 Docker 容器..."
+	docker compose down
+
+logs: ## 查看 Docker 容器日誌
+	docker compose logs -f
 
 clean: ## 清理編譯檔案
 	@echo "🧹 清理編譯檔案..."

@@ -1,0 +1,78 @@
+version: "3.8"
+
+# 本地開發環境：PostgreSQL + Redis + Redpanda (Kafka-compatible)
+# 啟動方式: docker compose up -d
+# 停止方式: docker compose down -v (含資料清除)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: exchange-postgres
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: exchange
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./sql/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d exchange"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: exchange-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Redpanda: Kafka-compatible broker，無需 Zookeeper，啟動快速
+  redpanda:
+    image: redpandadata/redpanda:latest
+    container_name: exchange-redpanda
+    command:
+      - redpanda
+      - start
+      - --smp 1                          # 單核心（開發用）
+      - --memory 512M
+      - --overprovisioned
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://localhost:9092
+      - --pandaproxy-addr 0.0.0.0:8082
+      - --advertise-pandaproxy-addr localhost:8082
+    ports:
+      - "9092:9092"   # Kafka API
+      - "8082:8082"   # Pandaproxy REST API (選用)
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redpanda Console: 可視化管理介面 (選用)
+  redpanda-console:
+    image: redpandadata/console:latest
+    container_name: exchange-redpanda-console
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    ports:
+      - "9080:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redpanda_data:
