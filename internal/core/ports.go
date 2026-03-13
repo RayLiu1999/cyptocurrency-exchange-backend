@@ -16,7 +16,7 @@ type DBTransaction interface {
 // TradeEventListener defines the interface for trade events
 type TradeEventListener interface {
 	OnTrade(trade *matching.Trade)
-	OnOrderUpdate(order *Order)                          // 推播訂單狀態更新
+	OnOrderUpdate(order *Order)                             // 推播訂單狀態更新
 	OnOrderBookUpdate(snapshot *matching.OrderBookSnapshot) // 推播掛單簿深度快照
 }
 
@@ -34,6 +34,7 @@ type OrderRepository interface {
 // TradeRepository defines the interface for trade persistence
 type TradeRepository interface {
 	CreateTrade(ctx context.Context, trade *matching.Trade) error
+	TradeExistsByID(ctx context.Context, id uuid.UUID) (bool, error) // 冪等性檢查
 	GetKLines(ctx context.Context, symbol string, interval string, limit int) ([]*KLine, error)
 	GetRecentTrades(ctx context.Context, symbol string, limit int) ([]*matching.Trade, error)
 	DeleteAllTrades(ctx context.Context) error
@@ -59,6 +60,13 @@ type UserRepository interface {
 type CacheRepository interface {
 	GetOrderBookSnapshot(ctx context.Context, symbol string) (*matching.OrderBookSnapshot, error)
 	SetOrderBookSnapshot(ctx context.Context, snapshot *matching.OrderBookSnapshot) error
+}
+
+// EventPublisher 定義事件發布介面 (依賴反轉，由 Kafka Producer 實作)
+// Core 層僅依賴此介面，不依賴具體的 Kafka 套件
+type EventPublisher interface {
+	Publish(ctx context.Context, topic, key string, payload interface{}) error
+	Close()
 }
 
 // ExchangeService defines the core business logic

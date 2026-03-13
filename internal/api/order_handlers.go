@@ -63,10 +63,9 @@ func (h *Handler) PlaceOrder(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"id":              order.ID,
-		"status":          core.StatusToString(order.Status),
-		"filled_quantity": order.FilledQuantity,
+	// 202 Accepted：訂單已接受並持久化，撮合與結算透過 Kafka 非同步完成
+	c.JSON(http.StatusAccepted, gin.H{
+		"order_id": order.ID,
 	})
 }
 

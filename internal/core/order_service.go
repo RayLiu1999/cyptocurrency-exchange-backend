@@ -63,7 +63,31 @@ func (s *ExchangeServiceImpl) PlaceOrder(ctx context.Context, order *Order) erro
 		return err
 	}
 
-	// === DB Commit 成功後才送入記憶體引擎（解決 Commit Timing Anomaly / 裂腦問題）===
+	// === TX1 成功後，優先嘗試 Kafka 非同步撮合；無 Kafka 時退回同步模式（向後相容）===
+	if s.eventBus != nil {
+		event := &OrderPlacedEvent{
+			EventType:      EventOrderPlaced,
+			Symbol:         order.Symbol,
+			OrderID:        order.ID,
+			UserID:         order.UserID,
+			Side:           order.Side,
+			Type:           order.Type,
+			Price:          order.Price,
+			Quantity:       order.Quantity,
+			CreatedAt:      order.CreatedAt,
+			AmountLocked:   amountToLock,
+			LockedCurrency: currencyToLock,
+		}
+		if err := s.eventBus.Publish(ctx, TopicOrders, order.Symbol, event); err != nil {
+			// Kafka 發布失敗：記錄錯誤但不 rollback TX1（資金已鎖定，訂單已在 DB）
+			// 此為已知的雙寫風險，Transactional Outbox 可在 Phase 6 補強
+			log.Printf("發布 OrderPlacedEvent 失敗: %v", err)
+		}
+		return nil
+	}
+
+	// === 無 Kafka Fallback：維持原本的同步撮合邏輯 ===
+	// DB Commit 成功後才送入記憶體引擎（解決 Commit Timing Anomaly / 裂腦問題）
 	matchOrder := s.convertToMatchingOrder(order)
 	engine := s.engineManager.GetEngine(order.Symbol)
 	trades := engine.Process(matchOrder)
@@ -307,19 +331,34 @@ func (s *ExchangeServiceImpl) CancelOrder(ctx context.Context, orderID, userID u
 
 	// 事務確定成功 (DB COMMIT 成功) 後，才去動記憶體
 	if err == nil {
-		engine := s.engineManager.GetEngine(orderPreCheck.Symbol)
-		var matchSide matching.OrderSide
-		if orderPreCheck.Side == SideBuy {
-			matchSide = matching.SideBuy
+		if s.eventBus != nil {
+			// Kafka 模式：以與 PlaceOrder 相同的 topic+partitionKey 發送撤單事件，
+			// 確保 MatchingConsumer 在處理完所有同一 symbol 的掛單後，才執行 Cancel
+			event := &OrderCancelRequestedEvent{
+				EventType: EventOrderCancelRequested,
+				Symbol:    orderPreCheck.Symbol,
+				OrderID:   orderID,
+				Side:      orderPreCheck.Side,
+			}
+			if err := s.eventBus.Publish(ctx, TopicOrders, orderPreCheck.Symbol, event); err != nil {
+				log.Printf("發布 OrderCancelRequestedEvent 失敗: %v", err)
+			}
 		} else {
-			matchSide = matching.SideSell
-		}
-		engine.Cancel(orderID, matchSide)
+			// 無 Kafka Fallback：同步取消記憶體引擎中的訂單
+			engine := s.engineManager.GetEngine(orderPreCheck.Symbol)
+			var matchSide matching.OrderSide
+			if orderPreCheck.Side == SideBuy {
+				matchSide = matching.SideBuy
+			} else {
+				matchSide = matching.SideSell
+			}
+			engine.Cancel(orderID, matchSide)
 
-		// 撤單後掛單簿已變更，推播最新深度
-		if s.tradeListener != nil {
-			snapshot := engine.GetOrderBookSnapshot(20)
-			s.tradeListener.OnOrderBookUpdate(snapshot)
+			// 撤單後掛單簿已變更，推播最新深度
+			if s.tradeListener != nil {
+				snapshot := engine.GetOrderBookSnapshot(20)
+				s.tradeListener.OnOrderBookUpdate(snapshot)
+			}
 		}
 	}
 

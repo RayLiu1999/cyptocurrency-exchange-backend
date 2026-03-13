@@ -10,6 +10,7 @@ import (
 
 	"github.com/RayLiu1999/exchange/internal/api"
 	"github.com/RayLiu1999/exchange/internal/core"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/kafka"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger" // 使用您自訂的 Logger
 	"github.com/RayLiu1999/exchange/internal/infrastructure/redis"
 	"github.com/RayLiu1999/exchange/internal/middleware"
@@ -56,17 +57,52 @@ func main() {
 		cacheRepo = repository.NewRedisCacheRepository(redisClient)
 	}
 
+	// 2.2 Kafka Producer (可選：Kafka 不可用時系統退回同步撮合模式)
+	kafkaCfg := kafka.DefaultConfig()
+	if brokers := os.Getenv("KAFKA_BROKERS"); brokers != "" {
+		kafkaCfg.Brokers = []string{brokers}
+	}
+	var eventBus core.EventPublisher
+	var kafkaProducer *kafka.Producer
+	if producer, perr := kafka.NewProducer(kafkaCfg); perr != nil {
+		logger.Log.Warn("Kafka 連線失敗，系統將以同步撮合模式運作", zap.Error(perr))
+	} else {
+		kafkaProducer = producer
+		eventBus = producer
+		logger.Log.Info("✅ Kafka Producer 已連線")
+	}
+
 	// 3. WebSocket Handler (先建立，作為事件監聽者)
 	wsHandler := api.NewWebSocketHandler()
 	go wsHandler.Run()
 	// wsHandler.StartBroadcastingDummyData() // 已移除，改用 Real Data
 
 	// 4. Service (內建撮合引擎，注入 repo 作為所有的 Repository 實現)
-	svc := core.NewExchangeService(repo, repo, repo, repo, repo, "BTC-USD", wsHandler, cacheRepo)
+	svc := core.NewExchangeService(repo, repo, repo, repo, repo, "BTC-USD", wsHandler, cacheRepo, eventBus)
 
 	// 啟動時從資料庫還原未完成的訂單，重建掛單簿
+	// ⚠️ 必須在 Kafka Consumers 啟動前完成，防止 Cold Start 空掛單簿問題
 	if err := svc.RestoreEngineSnapshot(context.Background()); err != nil {
 		logger.Log.Error("還原撮合引擎快照失敗", zap.Error(err))
+	}
+
+	// 啟動 Kafka Consumers（必須在 RestoreEngineSnapshot 完成後）
+	consumerCtx, cancelConsumers := context.WithCancel(context.Background())
+	if eventBus != nil {
+		matchConsumer, merr := kafka.NewConsumer(kafkaCfg, "matching-engine", []string{core.TopicOrders})
+		if merr != nil {
+			logger.Log.Error("建立 Kafka matching consumer 失敗", zap.Error(merr))
+		} else {
+			matchConsumer.Start(consumerCtx, svc.HandleMatchingEvent)
+		}
+
+		settleConsumer, serr := kafka.NewConsumer(kafkaCfg, "settlement-engine", []string{core.TopicSettlements})
+		if serr != nil {
+			logger.Log.Error("建立 Kafka settlement consumer 失敗", zap.Error(serr))
+		} else {
+			settleConsumer.Start(consumerCtx, svc.HandleSettlementEvent)
+		}
+		logger.Log.Info("✅ Kafka Consumers 已啟動 (matching + settlement)")
 	}
 
 	// 4-1. Simulator
@@ -94,8 +130,8 @@ func main() {
 	var idempStore middleware.IdempotencyStore
 
 	if redisClient != nil {
-		publicLimiter = middleware.NewRedisRateLimiter(redisClient, 60, time.Minute)        // 60 次/分鐘
-		privateLimiter = middleware.NewRedisRateLimiter(redisClient, 10, 1*time.Second)     // 10 次/秒
+		publicLimiter = middleware.NewRedisRateLimiter(redisClient, 60, time.Minute)    // 60 次/分鐘
+		privateLimiter = middleware.NewRedisRateLimiter(redisClient, 10, 1*time.Second) // 10 次/秒
 		idempStore = middleware.NewRedisIdempotencyStore(redisClient)
 		logger.Log.Info("✅ 安全性 Middleware 架構：[分散式 Redis 模式]")
 	} else {
@@ -136,6 +172,12 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	logger.Info("正在關閉伺服器...")
+
+	// 停止 Kafka Consumers 與 Producer（先停 Consumer 再停 Producer，避免 in-flight 訊息遺漏）
+	cancelConsumers()
+	if kafkaProducer != nil {
+		kafkaProducer.Close()
+	}
 
 	// 設定超時時間，等待當前請求處理完畢
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

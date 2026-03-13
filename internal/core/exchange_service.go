@@ -25,6 +25,7 @@ type ExchangeServiceImpl struct {
 	txManager     DBTransaction
 	engineManager *matching.EngineManager
 	cacheRepo     CacheRepository // Redis 快取 (可選)
+	eventBus      EventPublisher  // Kafka 事件發布 (可選，無 Kafka 時為 nil)
 }
 
 // AccountUpdate 資金變更紀錄
@@ -100,6 +101,7 @@ func NewExchangeService(
 	defaultSymbol string,
 	tradeListener TradeEventListener,
 	cacheRepo CacheRepository, // 注入 CacheRepository
+	eventBus EventPublisher, // 注入 EventPublisher (Kafka，可為 nil)
 ) *ExchangeServiceImpl {
 	manager := matching.NewEngineManager()
 	// 預先建立預設交易對的 Engine
@@ -112,7 +114,8 @@ func NewExchangeService(
 		tradeListener: tradeListener,
 		txManager:     txManager,
 		engineManager: manager,
-		cacheRepo:     cacheRepo, // 賦值
+		cacheRepo:     cacheRepo,
+		eventBus:      eventBus,
 	}
 }
 
