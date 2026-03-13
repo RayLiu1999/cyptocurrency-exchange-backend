@@ -6,6 +6,7 @@ import (
 
 	"github.com/RayLiu1999/exchange/internal/core"
 	"github.com/RayLiu1999/exchange/internal/core/matching"
+	"github.com/google/uuid"
 )
 
 // --- TradeRepository Implementation ---
@@ -20,6 +21,15 @@ func (r *PostgresRepository) CreateTrade(ctx context.Context, trade *matching.Tr
 		trade.ID, trade.Symbol, trade.MakerOrderID, trade.TakerOrderID,
 		trade.Price, trade.Quantity, trade.CreatedAt)
 	return err
+}
+
+// TradeExistsByID 檢查指定 ID 的成交記錄是否已存在（用於 settlement Consumer 的冪等性保護）
+func (r *PostgresRepository) TradeExistsByID(ctx context.Context, id uuid.UUID) (bool, error) {
+	executor := r.getExecutor(ctx)
+	var exists bool
+	query := `SELECT EXISTS(SELECT 1 FROM trades WHERE id = $1)`
+	err := executor.QueryRow(ctx, query, id).Scan(&exists)
+	return exists, err
 }
 
 func parseIntervalMs(interval string) int64 {

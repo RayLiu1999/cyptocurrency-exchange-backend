@@ -25,7 +25,7 @@ import (
 
 Phase 4: API 整合測試 ✅ DONE
 - [x] 4.1 POST /orders 參數錯誤應返回 400
-- [x] 4.2 POST /orders 成功應返回 201
+- [x] 4.2 POST /orders 成功應返回 202
 
 Phase 5: 訂單查詢 API ✅ DONE
 - [x] 5.1 GET /orders/:id 應返回訂單詳情
@@ -161,8 +161,8 @@ func TestPlaceOrderAPI_InvalidParams_Returns400(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TODO 4.2: POST /orders 成功應返回 201
-func TestPlaceOrderAPI_Success_Returns201(t *testing.T) {
+// TODO 4.2: POST /orders 成功應返回 202 Accepted（非同步撮合）
+func TestPlaceOrderAPI_Success_Returns202(t *testing.T) {
 	// Arrange
 	mockSvc := &MockExchangeService{}
 	mockSvc.On("PlaceOrder", mock.Anything, mock.Anything).Return(nil)
@@ -186,12 +186,11 @@ func TestPlaceOrderAPI_Success_Returns201(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	// Assert
-	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, http.StatusAccepted, w.Code)
 
 	var response map[string]interface{}
 	json.Unmarshal(w.Body.Bytes(), &response)
-	assert.NotEmpty(t, response["id"])
-	assert.Equal(t, "NEW", response["status"])
+	assert.NotEmpty(t, response["order_id"])
 }
 
 // ============================================================
