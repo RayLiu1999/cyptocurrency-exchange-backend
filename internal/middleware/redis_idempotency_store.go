@@ -25,7 +25,10 @@ func NewRedisIdempotencyStore(client *redis.Client) IdempotencyStore {
 
 // Get 取得已快取的冪等性結果
 func (s *RedisIdempotencyStore) Get(key string) *idempotencyEntry {
-	ctx := context.Background()
+	// 加上 2 秒超時防護
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	redisKey := fmt.Sprintf("exchange:idempotency:%s", key)
 
 	val, err := s.client.Client.Get(ctx, redisKey).Bytes()
@@ -47,7 +50,10 @@ func (s *RedisIdempotencyStore) Get(key string) *idempotencyEntry {
 
 // Set 寫入冪等性結果（帶有 TTL）
 func (s *RedisIdempotencyStore) Set(key string, statusCode int, body []byte, ttl time.Duration) {
-	ctx := context.Background()
+	// 加上 2 秒超時防護
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	redisKey := fmt.Sprintf("exchange:idempotency:%s", key)
 
 	entry := idempotencyEntry{
