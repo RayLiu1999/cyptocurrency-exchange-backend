@@ -6,6 +6,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/RayLiu1999/exchange/internal/core/matching"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
@@ -123,7 +124,9 @@ var _ ExchangeService = (*ExchangeServiceImpl)(nil)
 func (s *ExchangeServiceImpl) OnOrderBookUpdate(snapshot *matching.OrderBookSnapshot) {
 	if s.cacheRepo != nil {
 		go func() {
-			if err := s.cacheRepo.SetOrderBookSnapshot(context.Background(), snapshot); err != nil {
+			ctxStore, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := s.cacheRepo.SetOrderBookSnapshot(ctxStore, snapshot); err != nil {
 				logger.Error("更新 Redis 訂單簿快取失敗", zap.Error(err))
 			}
 		}()

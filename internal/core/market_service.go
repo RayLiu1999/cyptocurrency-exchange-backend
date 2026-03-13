@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/RayLiu1999/exchange/internal/core/matching"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
@@ -31,7 +32,9 @@ func (s *ExchangeServiceImpl) GetOrderBook(ctx context.Context, symbol string) (
 	// 3. 非同步回填快取 (Write-Aside)
 	if s.cacheRepo != nil {
 		go func() {
-			s.cacheRepo.SetOrderBookSnapshot(context.Background(), snapshot)
+			ctxStore, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			s.cacheRepo.SetOrderBookSnapshot(ctxStore, snapshot)
 		}()
 	}
 
