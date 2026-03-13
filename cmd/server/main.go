@@ -88,15 +88,19 @@ func main() {
 
 	// 啟動 Kafka Consumers（必須在 RestoreEngineSnapshot 完成後）
 	consumerCtx, cancelConsumers := context.WithCancel(context.Background())
+	var matchConsumer *kafka.Consumer
+	var settleConsumer *kafka.Consumer
+	var merr error
+	var serr error
 	if eventBus != nil {
-		matchConsumer, merr := kafka.NewConsumer(kafkaCfg, "matching-engine", []string{core.TopicOrders})
+		matchConsumer, merr = kafka.NewConsumer(kafkaCfg, "matching-engine", []string{core.TopicOrders})
 		if merr != nil {
 			logger.Log.Error("建立 Kafka matching consumer 失敗", zap.Error(merr))
 		} else {
 			matchConsumer.Start(consumerCtx, svc.HandleMatchingEvent)
 		}
 
-		settleConsumer, serr := kafka.NewConsumer(kafkaCfg, "settlement-engine", []string{core.TopicSettlements})
+		settleConsumer, serr = kafka.NewConsumer(kafkaCfg, "settlement-engine", []string{core.TopicSettlements})
 		if serr != nil {
 			logger.Log.Error("建立 Kafka settlement consumer 失敗", zap.Error(serr))
 		} else {
@@ -173,8 +177,14 @@ func main() {
 	<-quit
 	logger.Info("正在關閉伺服器...")
 
-	// 停止 Kafka Consumers 與 Producer（先停 Consumer 再停 Producer，避免 in-flight 訊息遺漏）
+	// 停止 Kafka Consumers，並等待 worker 完整結束後再關閉 Producer，避免關機時遺失 in-flight 事件。
 	cancelConsumers()
+	if matchConsumer != nil {
+		matchConsumer.Wait()
+	}
+	if settleConsumer != nil {
+		settleConsumer.Wait()
+	}
 	if kafkaProducer != nil {
 		kafkaProducer.Close()
 	}

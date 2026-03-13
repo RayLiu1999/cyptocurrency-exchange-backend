@@ -32,6 +32,16 @@ func (s *ExchangeServiceImpl) HandleSettlementEvent(ctx context.Context, key, va
 			log.Printf("ℹ️  結算事件已處理 (TradeID: %s)，跳過以避免重複結算", event.Trades[0].ID)
 			return nil
 		}
+	} else {
+		// 無成交退款事件無法依賴 TradeID 判斷，改以 TakerOrder 狀態阻止重複退款。
+		takerOrder, err := s.orderRepo.GetOrder(ctx, event.TakerOrderID)
+		if err != nil {
+			return fmt.Errorf("查詢 Taker 訂單失敗: %w", err)
+		}
+		if takerOrder.Status != StatusNew {
+			log.Printf("ℹ️  無成交結算事件已處理 (OrderID: %s, Status: %v)，跳過", event.TakerOrderID, takerOrder.Status)
+			return nil
+		}
 	}
 
 	return s.executeSettlementTx(ctx, &event)

@@ -2,6 +2,8 @@ package kafka
 
 import (
 	"context"
+	"sync"
+	"time"
 
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -16,6 +18,7 @@ type Consumer struct {
 	client  *kgo.Client
 	groupID string
 	topics  []string
+	wg      sync.WaitGroup
 }
 
 // NewConsumer 建立 Kafka 消費者
@@ -24,6 +27,7 @@ func NewConsumer(cfg Config, groupID string, topics []string) (*Consumer, error)
 		kgo.SeedBrokers(cfg.Brokers...),
 		kgo.ConsumerGroup(groupID),
 		kgo.ConsumeTopics(topics...),
+		kgo.DisableAutoCommit(),
 		// 從最早的 Offset 開始消費（確保重啟後不遺漏訊息）
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 	)
@@ -41,7 +45,9 @@ func NewConsumer(cfg Config, groupID string, topics []string) (*Consumer, error)
 // Start 在 Goroutine 中持續輪詢並處理訊息
 // 當 ctx 被取消時，自動停止並關閉 Consumer
 func (c *Consumer) Start(ctx context.Context, handler HandlerFunc) {
+	c.wg.Add(1)
 	go func() {
+		defer c.wg.Done()
 		defer c.client.Close()
 		for {
 			fetches := c.client.PollFetches(ctx)
@@ -63,15 +69,42 @@ func (c *Consumer) Start(ctx context.Context, handler HandlerFunc) {
 			}
 
 			fetches.EachRecord(func(record *kgo.Record) {
-				if err := handler(ctx, record.Key, record.Value); err != nil {
-					logger.Error("Kafka 訊息處理失敗",
-						zap.String("topic", record.Topic),
-						zap.String("group", c.groupID),
-						zap.Error(err),
-					)
-					// 不 panic，繼續處理下一筆（結合冪等性保護）
+				for {
+					if ctx.Err() != nil {
+						return
+					}
+
+					if err := handler(ctx, record.Key, record.Value); err != nil {
+						logger.Error("Kafka 訊息處理失敗，等待重試",
+							zap.String("topic", record.Topic),
+							zap.String("group", c.groupID),
+							zap.Error(err),
+						)
+						time.Sleep(1 * time.Second)
+						continue
+					}
+
+					if err := c.client.CommitRecords(ctx, record); err != nil {
+						if ctx.Err() != nil {
+							return
+						}
+						logger.Error("Kafka offset commit 失敗，等待重試",
+							zap.String("topic", record.Topic),
+							zap.String("group", c.groupID),
+							zap.Error(err),
+						)
+						time.Sleep(1 * time.Second)
+						continue
+					}
+
+					break
 				}
 			})
 		}
 	}()
+}
+
+// Wait 等待 Consumer goroutine 完整結束，確保關機時不會與 Producer.Close 競態。
+func (c *Consumer) Wait() {
+	c.wg.Wait()
 }

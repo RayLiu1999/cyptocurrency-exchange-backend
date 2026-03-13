@@ -6,6 +6,7 @@ import "time"
 type Config struct {
 	Brokers        []string
 	ConnectTimeout time.Duration
+	PublishTimeout time.Duration
 }
 
 // DefaultConfig 返回本地開發預設設定
@@ -13,5 +14,6 @@ func DefaultConfig() Config {
 	return Config{
 		Brokers:        []string{"localhost:9092"},
 		ConnectTimeout: 5 * time.Second,
+		PublishTimeout: 2 * time.Second,
 	}
 }
