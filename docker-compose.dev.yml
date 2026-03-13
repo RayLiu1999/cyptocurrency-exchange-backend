@@ -4,11 +4,13 @@ services:
   app:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: exchange-app-prod
+      dockerfile: Dockerfile.dev
+    container_name: exchange-app-dev
     ports:
       - "8080:8080"
+    volumes:
+      - .:/app
     env_file:
       - .env
     environment:
-      - GO_ENV=production
+      - GO_ENV=development

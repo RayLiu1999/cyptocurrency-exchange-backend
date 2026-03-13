@@ -1,0 +1,17 @@
+.git
+.github
+.vscode
+.idea
+.devcontainer
+.DS_Store
+/chart/node_modules
+/chart/package-lock.json
+/server
+*.exe
+*.test
+*.out
+coverage.*
+tmp/
+temp/
+logs/
+/backups

@@ -1,0 +1,17 @@
+# 開發環境專用
+FROM golang:1.25-alpine
+
+WORKDIR /app
+
+# 安裝系統依賴
+RUN apk add --no-cache git make
+
+# 安裝 air (熱重載工具)
+RUN go install github.com/air-verse/air@latest
+
+# 複製 go.mod 與 go.sum 以利用快取
+COPY go.mod go.sum ./
+RUN go mod download
+
+# 預設執行 air 進行熱重載
+CMD ["air"]
