@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -60,8 +61,19 @@ func main() {
 	// 2.2 Kafka Producer (可選：Kafka 不可用時系統退回同步撮合模式)
 	kafkaCfg := kafka.DefaultConfig()
 	if brokers := os.Getenv("KAFKA_BROKERS"); brokers != "" {
-		kafkaCfg.Brokers = []string{brokers}
+		// 支援多個 broker 以逗號分隔，例如："b1:9092,b2:9092"
+		kafkaCfg.Brokers = strings.Split(brokers, ",")
 	}
+	// 生產環境應關閉 AllowAutoTopicCreation (環境變數為 "true" 才開啟)
+	if os.Getenv("KAFKA_ALLOW_AUTO_CREATE") == "false" {
+		kafkaCfg.AllowAutoTopicCreation = false
+	} else if os.Getenv("KAFKA_ALLOW_AUTO_CREATE") == "true" {
+		kafkaCfg.AllowAutoTopicCreation = true
+	} else if os.Getenv("NODE_ENV") == "production" {
+		// 根據環境變數安全退避：NODE_ENV=production 時由 DefaultConfig 的 true 改為 false
+		kafkaCfg.AllowAutoTopicCreation = false
+	}
+
 	var eventBus core.EventPublisher
 	var kafkaProducer *kafka.Producer
 	if producer, perr := kafka.NewProducer(kafkaCfg); perr != nil {
@@ -178,12 +190,23 @@ func main() {
 	logger.Info("正在關閉伺服器...")
 
 	// 停止 Kafka Consumers，並等待 worker 完整結束後再關閉 Producer，避免關機時遺失 in-flight 事件。
+	// 設定最長等待 10 秒，防止 consumer 卡在 retry 迴圈時 Server 永久阻塞。
 	cancelConsumers()
-	if matchConsumer != nil {
-		matchConsumer.Wait()
-	}
-	if settleConsumer != nil {
-		settleConsumer.Wait()
+	shutdownDone := make(chan struct{})
+	go func() {
+		if matchConsumer != nil {
+			matchConsumer.Wait()
+		}
+		if settleConsumer != nil {
+			settleConsumer.Wait()
+		}
+		close(shutdownDone)
+	}()
+	select {
+	case <-shutdownDone:
+		logger.Info("Kafka Consumers 已完整關閉")
+	case <-time.After(10 * time.Second):
+		logger.Warn("Kafka Consumers 等待超時，強制繼續關機")
 	}
 	if kafkaProducer != nil {
 		kafkaProducer.Close()
