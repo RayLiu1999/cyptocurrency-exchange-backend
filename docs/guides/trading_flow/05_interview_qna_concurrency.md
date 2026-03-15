@@ -92,3 +92,7 @@ takerOrder.FilledQuantity = takerOrder.FilledQuantity.Add(trade.Quantity)
 
 ### 🛠解法 (The Solution)：保底分支與統一推播
 我們在 `needsSettlement` 的 `else` 分支補回了 `s.tradeListener.OnOrderUpdate(order)`，並確保**掛單簿快照的更新 (`OnOrderBookUpdate`)** 是放在整段 `PlaceOrder` 流程的絕對終點。不管走結算還是排隊分支，只要能影響流動性，最終必定推播即時深度。這體現了處理複雜分散流程時，對邊界條件 (Edge Cases) 的關注度。 
+
+---
+
+👉 **延伸閱讀**：[Redis 深度解析→更多基礎設施模式](06_redis_deep_dive.md) | [Kafka 事件驅動→Kafka TOCTOU 防禦](07_kafka_event_driven.md) | [架構設計模式](08_architecture_patterns.md)
