@@ -19,11 +19,16 @@ type Producer struct {
 
 // NewProducer 建立 Kafka 生產者
 func NewProducer(cfg Config) (*Producer, error) {
-	client, err := kgo.NewClient(
+	opts := []kgo.Opt{
 		kgo.SeedBrokers(cfg.Brokers...),
-		// 啟用自動建立 Topic (針對本地開發/Redpanda 環境)
-		kgo.AllowAutoTopicCreation(),
-	)
+	}
+
+	// 僅在設定允許時啟用自動建立 Topic (通常僅用於開發環境)
+	if cfg.AllowAutoTopicCreation {
+		opts = append(opts, kgo.AllowAutoTopicCreation())
+	}
+
+	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("建立 Kafka Producer 失敗: %w", err)
 	}

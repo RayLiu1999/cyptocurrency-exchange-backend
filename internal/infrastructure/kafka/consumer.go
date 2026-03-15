@@ -69,6 +69,7 @@ func (c *Consumer) Start(ctx context.Context, handler HandlerFunc) {
 			}
 
 			fetches.EachRecord(func(record *kgo.Record) {
+				backoff := 100 * time.Millisecond
 				for {
 					if ctx.Err() != nil {
 						return
@@ -78,9 +79,19 @@ func (c *Consumer) Start(ctx context.Context, handler HandlerFunc) {
 						logger.Error("Kafka 訊息處理失敗，等待重試",
 							zap.String("topic", record.Topic),
 							zap.String("group", c.groupID),
+							zap.Duration("backoff", backoff),
 							zap.Error(err),
 						)
-						time.Sleep(1 * time.Second)
+
+						select {
+						case <-time.After(backoff):
+							backoff *= 2
+							if backoff > 30*time.Second {
+								backoff = 30 * time.Second
+							}
+						case <-ctx.Done():
+							return
+						}
 						continue
 					}
 
@@ -91,9 +102,19 @@ func (c *Consumer) Start(ctx context.Context, handler HandlerFunc) {
 						logger.Error("Kafka offset commit 失敗，等待重試",
 							zap.String("topic", record.Topic),
 							zap.String("group", c.groupID),
+							zap.Duration("backoff", backoff),
 							zap.Error(err),
 						)
-						time.Sleep(1 * time.Second)
+
+						select {
+						case <-time.After(backoff):
+							backoff *= 2
+							if backoff > 30*time.Second {
+								backoff = 30 * time.Second
+							}
+						case <-ctx.Done():
+							return
+						}
 						continue
 					}
 
