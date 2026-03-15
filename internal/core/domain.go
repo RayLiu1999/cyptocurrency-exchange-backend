@@ -98,6 +98,7 @@ func StatusToString(s OrderStatus) string {
 
 var (
 	ErrInsufficientFunds = fmt.Errorf("insufficient funds")
+	ErrIdempotencySkip   = fmt.Errorf("idempotency skip: event already processed")
 )
 
 type User struct {

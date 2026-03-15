@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"time"
 
 	"github.com/RayLiu1999/exchange/internal/core/matching"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
+	"go.uber.org/zap"
 )
 
 // HandleMatchingEvent 是 Kafka exchange.orders Topic 的消費者 Handler。
@@ -38,7 +40,9 @@ func (s *ExchangeServiceImpl) HandleMatchingEvent(ctx context.Context, key, valu
 
 	default:
 		// 未知事件：記錄警告後 Commit（避免 Consumer 卡在同一筆訊息）
-		log.Printf("⚠️  HandleMatchingEvent 收到未知 EventType: %s，跳過", envelope.EventType)
+		logger.Warn("HandleMatchingEvent 收到未知 EventType，跳過",
+			zap.String("event_type", string(envelope.EventType)),
+		)
 		return nil
 	}
 }
@@ -66,15 +70,31 @@ func (s *ExchangeServiceImpl) handleOrderPlaced(ctx context.Context, event *Orde
 	if needsSettlement && s.eventBus != nil {
 		settlementEvent := &SettlementRequestedEvent{
 			EventType:      EventSettlementRequested,
+			Symbol:         event.Symbol,
 			TakerOrderID:   event.OrderID,
 			AmountLocked:   event.AmountLocked,
 			LockedCurrency: event.LockedCurrency,
 			RemainingQty:   matchOrder.Quantity, // 撮合後的剩餘數量（STP 偵測用）
 			Trades:         trades,
 		}
-		if err := s.eventBus.Publish(ctx, TopicSettlements, event.Symbol, settlementEvent); err != nil {
-			// 結算事件發布失敗是嚴重錯誤；返回 error 讓 Consumer 重試（at-least-once）
-			return fmt.Errorf("發布 SettlementRequestedEvent 失敗: %w", err)
+		// 🌟 修正：原地無限重試發布，絕不 return err 導致重新撮合
+		for {
+			err := s.eventBus.Publish(ctx, TopicSettlements, event.Symbol, settlementEvent)
+			if err == nil {
+				break // 發布成功，繼續往下走
+			}
+
+			// 如果是優雅關機觸發的 Context 取消，我們直接 return
+			// 這樣外層 Consumer 就不會 Commit，重啟後引擎會從 DB Hydration 恢復，完全安全！
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+
+			logger.Warn("發布 SettlementRequestedEvent 失敗，1秒後重試",
+				zap.String("symbol", event.Symbol),
+				zap.Error(err),
+			)
+			time.Sleep(1 * time.Second)
 		}
 
 		// 個別 TradeExecutedEvent 供外部系統訂閱（例如：行情推播、交易歷史）
@@ -88,9 +108,20 @@ func (s *ExchangeServiceImpl) handleOrderPlaced(ctx context.Context, event *Orde
 				Price:        trade.Price,
 				Quantity:     trade.Quantity,
 			}
-			if err := s.eventBus.Publish(ctx, TopicTrades, event.Symbol, tradeEvent); err != nil {
-				log.Printf("發布 TradeExecutedEvent 失敗 (TradeID: %s): %v", trade.ID, err)
-				// 不返回 error：行情事件失敗不應阻塞結算流程
+			// 原地無限重試發布行情事件
+			for {
+				err := s.eventBus.Publish(ctx, TopicTrades, event.Symbol, tradeEvent)
+				if err == nil {
+					break
+				}
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				logger.Warn("發布 TradeExecutedEvent 失敗，1秒後重試",
+					zap.String("trade_id", trade.ID.String()),
+					zap.Error(err),
+				)
+				time.Sleep(1 * time.Second)
 			}
 		}
 	}

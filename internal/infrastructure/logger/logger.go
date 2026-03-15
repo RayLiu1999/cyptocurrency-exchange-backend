@@ -45,6 +45,11 @@ func Error(msg string, fields ...zap.Field) {
 	Log.Error(msg, fields...)
 }
 
+// Warn 快速記錄 Warn
+func Warn(msg string, fields ...zap.Field) {
+	Log.Warn(msg, fields...)
+}
+
 // Debug 快速記錄 Debug
 func Debug(msg string, fields ...zap.Field) {
 	Log.Debug(msg, fields...)

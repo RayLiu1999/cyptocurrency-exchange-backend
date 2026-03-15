@@ -3,13 +3,15 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"time"
 
+	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
+	"go.uber.org/zap"
 )
 
 // HandleSettlementEvent 是 Kafka exchange.settlements Topic 的消費者 Handler。
@@ -29,7 +31,9 @@ func (s *ExchangeServiceImpl) HandleSettlementEvent(ctx context.Context, key, va
 			return fmt.Errorf("冪等檢查失敗: %w", err)
 		}
 		if exists {
-			log.Printf("ℹ️  結算事件已處理 (TradeID: %s)，跳過以避免重複結算", event.Trades[0].ID)
+			logger.Info("結算事件已處理，跳過以避免重複結算",
+				zap.String("trade_id", event.Trades[0].ID.String()),
+			)
 			return nil
 		}
 	} else {
@@ -39,7 +43,10 @@ func (s *ExchangeServiceImpl) HandleSettlementEvent(ctx context.Context, key, va
 			return fmt.Errorf("查詢 Taker 訂單失敗: %w", err)
 		}
 		if takerOrder.Status != StatusNew {
-			log.Printf("ℹ️  無成交結算事件已處理 (OrderID: %s, Status: %v)，跳過", event.TakerOrderID, takerOrder.Status)
+			logger.Info("無成交結算事件已處理，跳過",
+				zap.String("order_id", event.TakerOrderID.String()),
+				zap.String("status", StatusToString(takerOrder.Status)),
+			)
 			return nil
 		}
 	}
@@ -79,6 +86,30 @@ func (s *ExchangeServiceImpl) executeSettlementTx(ctx context.Context, event *Se
 		}
 
 		takerOrder := lockedOrders[event.TakerOrderID]
+
+		// === Phase 1.1: TX 內部冪等性檢查 (解決 TOCTOU 風險) ===
+		// 取得排他鎖後，再次確認訂單狀態。如果不是 NEW，說明已被同步或其他 Worker 處理完成。
+		if takerOrder.Status != StatusNew {
+			logger.Info("結算事件已在 TX 內偵測為重複，跳過",
+				zap.String("order_id", takerOrder.ID.String()),
+				zap.String("current_status", StatusToString(takerOrder.Status)),
+			)
+			return ErrIdempotencySkip
+		}
+
+		// 如果有成交紀錄，再次確認 Trade 是否已存在
+		if len(event.Trades) > 0 {
+			exists, err := s.tradeRepo.TradeExistsByID(ctx, event.Trades[0].ID)
+			if err != nil {
+				return fmt.Errorf("TX 內部冪等檢查失敗: %w", err)
+			}
+			if exists {
+				logger.Info("成交紀錄已處理，跳過以避免重複結算",
+					zap.String("trade_id", event.Trades[0].ID.String()),
+				)
+				return ErrIdempotencySkip
+			}
+		}
 
 		// === Phase 2: 狀態計算與資金聚合 ===
 		allAccountUpdates := make([]AccountUpdate, 0)
@@ -193,7 +224,13 @@ func (s *ExchangeServiceImpl) executeSettlementTx(ctx context.Context, event *Se
 	})
 
 	if err != nil {
-		log.Printf("結算事務失敗 (TakerOrderID: %s): %v", event.TakerOrderID, err)
+		if errors.Is(err, ErrIdempotencySkip) {
+			return nil // 冪等性跳過，不視為錯誤，正常 Commit 為成功
+		}
+		logger.Error("結算事務失敗",
+			zap.String("taker_order_id", event.TakerOrderID.String()),
+			zap.Error(err),
+		)
 	}
 	return err
 }
