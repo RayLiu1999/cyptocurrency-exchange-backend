@@ -4,6 +4,9 @@
 BUILD_DIR=.
 DB_USER=user
 DB_NAME=exchange
+BASE_URL ?= http://localhost:8080/api/v1
+SYMBOL ?= BTC-USD
+K6_ENV_FLAGS ?=
 
 # 載入 .env 檔案並匯出為環境變數
 ifneq (,$(wildcard .env))
@@ -13,7 +16,7 @@ endif
 
 help: ## 顯示所有可用指令
 	@echo "可用指令:"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
+	@grep -h -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
 build: ## 編譯專案 (本地)
 	@echo "📦 編譯專案..."
@@ -38,7 +41,8 @@ test-all: ## 執行所有測試 (含單元、整合、Race)
 
 smoke-test: ## 執行 k6 冒煙測試（核心交易流程）
 	@echo "🔥 執行 k6 核心冒煙測試..."
-	k6 run scripts/k6/smoke-test.js
+	@echo "> k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env SYMBOL=$(SYMBOL) scripts/k6/smoke-test.js"
+	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env SYMBOL=$(SYMBOL) scripts/k6/smoke-test.js
 
 test-coverage: ## 執行測試並產生覆蓋率報告
 	@echo "📊 產生測試覆蓋率..."

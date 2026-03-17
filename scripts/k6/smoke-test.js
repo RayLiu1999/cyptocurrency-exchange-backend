@@ -11,7 +11,7 @@ export const options = {
   },
 };
 
-const baseUrl = __ENV.BASE_URL || 'http://exchange-staging-alb-346484770.ap-northeast-1.elb.amazonaws.com/api/v1';
+const baseUrl = __ENV.BASE_URL || 'http://localhost:8080/api/v1';
 const symbol = __ENV.SYMBOL || 'BTC-USD';
 
 function jsonHeaders(extraHeaders = {}) {
