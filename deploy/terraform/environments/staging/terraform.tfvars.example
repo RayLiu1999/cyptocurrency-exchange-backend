@@ -1,0 +1,25 @@
+# terraform.tfvars.example
+# 複製此檔案為 terraform.tfvars 並填入實際的機敏值
+# 注意：terraform.tfvars 已加入 .gitignore，請勿提交機敏資訊
+
+# ================================
+# 必填欄位（無預設值）
+# ================================
+db_password        = "CHANGE_ME_use_strong_password"
+budget_alert_email = "your-email@example.com"  # 超出預算上限時收到警報的 Email
+
+# ================================
+# 選填欄位（已有合理預設值）
+# ================================
+# project_name = "exchange"
+# environment  = "staging"
+# aws_region   = "ap-northeast-1"
+
+# vpc_cidr           = "10.0.0.0/16"
+# availability_zones = ["ap-northeast-1a", "ap-northeast-1c"]
+
+# db_instance_class = "db.t4g.micro"
+# db_name           = "exchange"
+# db_username       = "exchange_admin"
+
+# redis_node_type = "cache.t4g.micro"
