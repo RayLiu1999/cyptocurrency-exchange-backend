@@ -15,7 +15,7 @@ COPY . .
 
 # Build the binary
 # CGO_ENABLED=0 for static binary
-RUN CGO_ENABLED=0 GOOS=linux go build -o main ./cmd/server/main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o main ./cmd/server/main.go
 
 # Run Stage
 FROM alpine:latest
@@ -28,6 +28,7 @@ RUN apk --no-cache add ca-certificates
 # Copy binary from builder
 COPY --from=builder /app/main .
 COPY --from=builder /app/docs ./docs
+COPY --from=builder /app/sql ./sql
 
 # Expose port
 EXPOSE 8080

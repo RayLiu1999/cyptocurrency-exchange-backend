@@ -2,7 +2,7 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Users table
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id UUID NOT NULL PRIMARY KEY,          -- Go 端使用 UUID v7 產生
     email VARCHAR(255) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
@@ -11,7 +11,7 @@ CREATE TABLE users (
 );
 
 -- Accounts (Wallets) table
-CREATE TABLE accounts (
+CREATE TABLE IF NOT EXISTS accounts (
     id UUID NOT NULL PRIMARY KEY,          -- Go 端使用 UUID v7 產生
     user_id UUID NOT NULL REFERENCES users(id),
     currency VARCHAR(10) NOT NULL,
@@ -28,7 +28,7 @@ CREATE TABLE accounts (
 -- side:   1=BUY, 2=SELL
 -- type:   1=LIMIT, 2=MARKET
 -- status: 1=NEW, 2=PARTIALLY_FILLED, 3=FILLED, 4=CANCELED, 5=REJECTED
-CREATE TABLE orders (
+CREATE TABLE IF NOT EXISTS orders (
     id UUID NOT NULL PRIMARY KEY,          -- Go 端使用 UUID v7 產生
     user_id UUID NOT NULL REFERENCES users(id),
     symbol VARCHAR(20) NOT NULL,           -- 例如 "BTC-USD"
@@ -43,7 +43,7 @@ CREATE TABLE orders (
 );
 
 -- Trades table (Execution history)
-CREATE TABLE trades (
+CREATE TABLE IF NOT EXISTS trades (
     id UUID NOT NULL PRIMARY KEY,          -- Go 端使用 UUID v7 產生
     maker_order_id UUID NOT NULL REFERENCES orders(id),
     taker_order_id UUID NOT NULL REFERENCES orders(id),
@@ -54,6 +54,6 @@ CREATE TABLE trades (
 );
 
 -- Indexes for performance
-CREATE INDEX idx_orders_user_id ON orders(user_id);
-CREATE INDEX idx_orders_status ON orders(status);
-CREATE INDEX idx_orders_symbol_side_price ON orders(symbol, side, price); -- 供撮合引擎使用
+CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_symbol_side_price ON orders(symbol, side, price); -- 供撮合引擎使用

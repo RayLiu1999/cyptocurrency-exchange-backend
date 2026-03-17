@@ -40,6 +40,18 @@ func main() {
 	}
 	defer pool.Close()
 
+	// 自動執行 Migrations
+	logger.Log.Info("📦 正在執行資料庫 Migration...")
+	schemaBytes, err := os.ReadFile("sql/schema.sql")
+	if err != nil {
+		logger.Log.Warn("找不到 sql/schema.sql 文件，跳過自動 Migration", zap.Error(err))
+	} else {
+		if _, err := pool.Exec(context.Background(), string(schemaBytes)); err != nil {
+			logger.Log.Fatal("❌ 資料庫 Migration 失敗", zap.Error(err))
+		}
+		logger.Log.Info("✅ 資料庫 Migration 完成")
+	}
+
 	// 2. Repository
 	repo := repository.NewPostgresRepository(pool)
 
@@ -161,6 +173,11 @@ func main() {
 	handler := api.NewHandler(svc, sim)
 	v1 := r.Group("/api/v1")
 	handler.RegisterRoutes(v1, publicLimiter, privateLimiter, idempStore)
+
+	// Health Check（ALB 與 ECS 健康檢查用，不需要驗證或限流）
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
 
 	// WebSocket Route
 	r.GET("/ws", wsHandler.HandleWS)
