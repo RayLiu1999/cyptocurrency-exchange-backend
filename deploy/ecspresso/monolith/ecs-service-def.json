@@ -1,0 +1,32 @@
+{
+  "serviceName": "monolith",
+  "desiredCount": 1,
+  "launchType": "FARGATE",
+  "platformVersion": "LATEST",
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": {{ tfstate `output.private_subnet_ids` }},
+      "securityGroups": ["{{ tfstate `output.sg_ecs_id` }}"],
+      "assignPublicIp": "DISABLED"
+    }
+  },
+  "loadBalancers": [
+    {
+      "targetGroupArn": "{{ tfstate `output.target_group_arn` }}",
+      "containerName": "monolith",
+      "containerPort": 8080
+    }
+  ],
+  "deploymentConfiguration": {
+    "minimumHealthyPercent": 50,
+    "maximumPercent": 200,
+    "deploymentCircuitBreaker": {
+      "enable": true,
+      "rollback": true
+    }
+  },
+  "deploymentController": {
+    "type": "ECS"
+  },
+  "enableExecuteCommand": true
+}
