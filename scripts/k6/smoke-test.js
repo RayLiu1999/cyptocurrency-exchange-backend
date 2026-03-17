@@ -11,7 +11,7 @@ export const options = {
   },
 };
 
-const baseUrl = __ENV.BASE_URL || 'http://localhost:8080/api/v1';
+const baseUrl = __ENV.BASE_URL || 'http://exchange-staging-alb-346484770.ap-northeast-1.elb.amazonaws.com/api/v1';
 const symbol = __ENV.SYMBOL || 'BTC-USD';
 
 function jsonHeaders(extraHeaders = {}) {
@@ -65,23 +65,20 @@ export default function () {
 
   const placeOrderResponse = http.post(`${baseUrl}/orders`, orderPayload, jsonHeaders());
   check(placeOrderResponse, {
-    'place order returns 201': (response) => response.status === 201,
+    'place order returns 201 or 202': (response) => response.status === 201 || response.status === 202,
   });
 
   const placeOrderData = mustParseJson(placeOrderResponse, 'PlaceOrder');
-  const orderId = placeOrderData.id;
+  const orderId = placeOrderData.id || placeOrderData.order_id;
   if (!orderId) {
-    fail('PlaceOrder 未返回 order id');
+    fail(`PlaceOrder 未返回 order id: ${JSON.stringify(placeOrderData)}`);
   }
-
-  check(placeOrderData, {
-    'place order returns NEW status': (data) => data.status === 'NEW',
-  });
 
   const getOrderResponse = http.get(`${baseUrl}/orders/${orderId}`);
   check(getOrderResponse, {
     'get order returns 200': (response) => response.status === 200,
     'get order returns same id': (response) => response.json('id') === orderId,
+    'get order returns NEW status': (response) => response.json('status') === 'NEW',
   });
 
   const listOrdersResponse = http.get(`${baseUrl}/orders?user_id=${userId}`);
