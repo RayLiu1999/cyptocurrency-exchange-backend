@@ -112,4 +112,82 @@ clean: ## 清理編譯檔案與暫存
 	rm -f coverage.txt coverage.html
 	@echo "✅ 清理完成"
 
+# --- ☁️  AWS 雲端基礎開發 (Terraform) ---
+
+ENVIRONMENT ?= staging
+AWS_REGION ?= ap-northeast-1
+TF_DIR = deploy/terraform/environments/$(ENVIRONMENT)
+ECSPRESSO_DIR = deploy/ecspresso/monolith
+
+infra-init: ## 初始化 Terraform 基礎建設
+	@echo "🏗️  初始化 Terraform ($(ENVIRONMENT))..."
+	cd $(TF_DIR) && terraform init
+
+infra-plan: ## 預覽待變動的雲端資源
+	@echo "📋 預覽雲端資源變動..."
+	cd $(TF_DIR) && terraform plan -input=false -out=tfplan
+
+infra-apply: ## 正式執行並更新雲端基礎建設
+	@echo "🚀 正式套用雲端基礎建設變動..."
+	@echo "注意：這將產生 AWS 費用。"
+	cd $(TF_DIR) && terraform apply tfplan
+
+infra-destroy: ## 移除所有雲端基礎建設 (需加 CONFIRM=1)
+ifeq ($(CONFIRM),1)
+	@echo "🧨 刪除 $(ENVIRONMENT) 環境所有雲端資源..."
+	cd $(TF_DIR) && terraform destroy -auto-approve
+else
+	@echo "⚠️  警告：這是危險操作！請執行 'make infra-destroy CONFIRM=1' 來確認刪除。"
+	@exit 1
+endif
+
+# --- 🐳  鏡像管理與 AWS ECR ---
+
+aws-login: ## 登入 AWS ECR
+	@echo "🔑 登入 AWS ECR..."
+	aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $$(cd $(TF_DIR) && terraform output -raw ecr_repository_url | cut -d'/' -f1)
+
+docker-build-push: aws-login ## 編譯並推送 Docker 鏡像至 AWS ECR
+	@echo "🐳 編譯 Docker 鏡像..."
+	docker build -t $$(cd $(TF_DIR) && terraform output -raw ecr_repository_url):latest .
+	@echo "📤 推送鏡像至 ECR..."
+	docker push $$(cd $(TF_DIR) && terraform output -raw ecr_repository_url):latest
+
+# --- 🚀  應用程式部署 (ecspresso) ---
+
+ecs-deploy: ## 使用 ecspresso 部署應用程式至 ECS
+	@echo "🚀 部署應用程式至 ECS Fargate ($(ENVIRONMENT))..."
+	export ECR_IMAGE=$$(cd $(TF_DIR) && terraform output -raw ecr_repository_url):latest && \
+	cd $(ECSPRESSO_DIR) && ecspresso deploy --config ecspresso.yml
+
+ecs-rollback: ## 快速回滾至上一個穩定版本
+	@echo "⏪ 回滾 ECS 服務..."
+	cd $(ECSPRESSO_DIR) && ecspresso rollback --config ecspresso.yml
+
+ecs-status: ## 查看目前 ECS 服務與任務狀態
+	@echo "📊 查看 ECS 狀態..."
+	cd $(ECSPRESSO_DIR) && ecspresso status --config ecspresso.yml --events 10
+
+ecs-logs: ## 查看雲端 CloudWatch 即時日誌 (Tail)
+	@echo "📝 查看即時日誌..."
+	aws logs tail --region $(AWS_REGION) --follow --since 5m /ecs/exchange/$(ENVIRONMENT)/monolith
+
+ecs-exec: ## 進入運行的 Fargate 容器執行指令 (類似 docker exec)
+	@echo "🐚 啟動互動式 Shell 進入容器..."
+	cd $(ECSPRESSO_DIR) && ecspresso exec --config ecspresso.yml --command /bin/sh
+
+# --- 🏆  一鍵完整流程 ---
+
+deploy-all: infra-apply docker-build-push ecs-deploy ## [完整佈署] 基礎建設 + 鏡像推送 + ECS 更新
+
+destroy-all: ## [完整刪除] 刪除 ECS 服務 + 基礎設施 (需加 CONFIRM=1)
+ifeq ($(CONFIRM),1)
+	@echo "🧨 準備完全卸載雲端環境..."
+	-cd $(ECSPRESSO_DIR) && ecspresso delete --config ecspresso.yml --force
+	$(MAKE) infra-destroy CONFIRM=1
+else
+	@echo "⚠️  警告：這會刪除整個雲端環境！請執行 'make destroy-all CONFIRM=1'。"
+	@exit 1
+endif
+
 .DEFAULT_GOAL := help

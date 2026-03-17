@@ -1,32 +1,29 @@
-# Binaries for programs and plugins
+## -----------------------------
+# Ignore rules for backend
+## -----------------------------
+
+# --- Binaries and build artifacts
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
 /server
-*.out
-
-# Test binary, built with `go test -c`
 *.test
-
-# Output of the go coverage tool
 *.out
 coverage.html
 coverage.txt
 
-# Dependency directories
+# --- Go / dependencies
 vendor/
-
-# Go workspace file
 go.work
 
-# Environment variables
+# --- Environment & secrets
 .env
 .env.local
 *.csv
 
-# IDE
+# --- Editors / OS
 .vscode/
 .idea/
 *.swp
@@ -34,19 +31,47 @@ go.work
 *~
 .DS_Store
 
-# Database
+# --- Database files
 *.db
 *.sqlite
 
-# Logs
+# --- Logs & temp
 *.log
 logs/
+/tmp/
+/var/tmp/
+*.pid
+*.sock
 
-# Temporary files
+# --- Misc temp
 tmp/
 temp/
-
+/backups
 chart/
 
-# temp
-/backups
+# --- Docker
+*.tar
+image.tar
+
+# --- Terraform (ignore local state & sensitive vars)
+terraform.tfvars
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+deploy/terraform/environments/**/terraform.tfvars
+deploy/terraform/environments/**/terraform.tfstate.*
+deploy/terraform/environments/**/.terraform/
+deploy/terraform/environments/**/tfplan
+deploy/terraform/environments/**/.terraform.lock.hcl
+deploy/terraform/environments/**/terraform.tfstate
+deploy/terraform/environments/**/terraform.tfstate.backup
+
+# --- AWS credentials
+.aws/credentials
+.aws/config
+
+# --- ecspresso / deployment helpers
+deploy/ecspresso/**/test-tfstate.json
+deploy/ecspresso/**/ecspresso.yml
+
