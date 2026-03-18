@@ -4,9 +4,8 @@
 .idea
 .devcontainer
 .DS_Store
-/chart/node_modules
-/chart/package-lock.json
-/server
+
+# Go build outputs
 *.exe
 *.test
 *.out
@@ -14,4 +13,25 @@ coverage.*
 tmp/
 temp/
 logs/
-/backups
+
+# Project specific non-source directories
+/deploy
+/docs
+/scripts
+/sql
+/.agent
+/internal/infrastructure/redis/redis-data
+
+# Frontend & Node
+node_modules
+package-lock.json
+
+# Docker & CI
+docker-compose*.yml
+.dockerignore
+Dockerfile*
+.env
+
+# Miscellaneous
+README.md
+Makefile

@@ -13,9 +13,12 @@ RUN go mod download
 # Copy source code
 COPY . .
 
+# Which service to build (e.g., gateway, matching-engine, order-service, market-data-service)
+ARG SERVICE_NAME
+
 # Build the binary
 # CGO_ENABLED=0 for static binary
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o main ./cmd/server/main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o main ./cmd/${SERVICE_NAME}/main.go
 
 # Run Stage
 FROM alpine:latest
@@ -27,12 +30,13 @@ RUN apk --no-cache add ca-certificates
 
 # Copy binary from builder
 COPY --from=builder /app/main .
-COPY --from=builder /app/docs ./docs
-COPY --from=builder /app/sql ./sql
 
-# Expose port
-EXPOSE 8080
+# Expose ports based on the service (Note: EXPOSE is mostly documentation, Docker Compose maps ports)
+# 8100: order-service
+# 8101: matching-engine (health)
+# 8102: market-data-service
+# 8103: gateway
+EXPOSE 8100 8101 8102 8103
 
-# Environment variables should be passed at runtime
-# CMD ["./main"]
+# Run the binary
 ENTRYPOINT ["./main"]

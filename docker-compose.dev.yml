@@ -10,23 +10,22 @@ services:
     container_name: exchange-gateway
     command: air -c .air.gateway.toml
     ports:
-      - "8084:8084"
+      - "${GATEWAY_PORT:-8100}:${GATEWAY_PORT:-8100}"
     volumes:
       - .:/app
     env_file:
       - .env
-    environment:
-      GO_ENV: development
-      GATEWAY_PORT: "8084"
-      ORDER_SERVICE_URL: http://order-service:8080
-      MARKET_DATA_SERVICE_URL: http://market-data-service:8083
     depends_on:
       order-service:
         condition: service_healthy
       market-data-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8084/health || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:${GATEWAY_PORT:-8100}/health || exit 1",
+        ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -39,15 +38,17 @@ services:
     container_name: exchange-matching-engine
     command: air -c .air.matching-engine.toml
     ports:
-      - "8081:8081" # health check
+      - "${MATCHING_ENGINE_PORT:-8101}:${MATCHING_ENGINE_PORT:-8101}" # health check
     volumes:
       - .:/app
     env_file:
       - .env
-    environment:
-      GO_ENV: development
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:${MATCHING_ENGINE_PORT:-8101}/health || exit 1",
+        ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -60,18 +61,20 @@ services:
     container_name: exchange-order-service
     command: air -c .air.order-service.toml
     ports:
-      - "8080:8080" # HTTP API
+      - "${ORDER_SERVICE_PORT:-8103}:${ORDER_SERVICE_PORT:-8103}" # HTTP API
     volumes:
       - .:/app
     env_file:
       - .env
-    environment:
-      GO_ENV: development
     depends_on:
       matching-engine:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:${ORDER_SERVICE_PORT:-8103}/health || exit 1",
+        ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -84,21 +87,22 @@ services:
     container_name: exchange-market-data-service
     command: air -c .air.market-data-service.toml
     ports:
-      - "8083:8083"
+      - "${MARKET_DATA_PORT:-8102}:${MARKET_DATA_PORT:-8102}"
     volumes:
       - .:/app
     env_file:
       - .env
-    environment:
-      GO_ENV: development
-      MARKET_DATA_PORT: "8083"
     depends_on:
       matching-engine:
         condition: service_healthy
       order-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8083/health || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://localhost:${MARKET_DATA_PORT:-8102}/health || exit 1",
+        ]
       interval: 10s
       timeout: 5s
       retries: 10

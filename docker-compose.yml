@@ -1,14 +1,102 @@
 version: "3.8"
 
 services:
-  app:
+  # ----------------------------------------------------------
+  # Production / Load Testing Environment
+  # ----------------------------------------------------------
+
+  gateway:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: exchange-app-prod
+      args:
+        SERVICE_NAME: gateway
+    container_name: exchange-gateway-prod
     ports:
-      - "8080:8080"
+      - "${GATEWAY_PORT:-8100}:${GATEWAY_PORT:-8100}"
     env_file:
       - .env
     environment:
-      - GO_ENV=production
+      GO_ENV: production
+      GOMAXPROCS: "1"
+      GOMEMLIMIT: "450MiB"
+    # 針對壓測設定資源限制
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    depends_on:
+      - order-service
+      - market-data-service
+
+  matching-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: matching-engine
+    container_name: exchange-matching-engine-prod
+    ports:
+      - "${MATCHING_ENGINE_PORT:-8101}:${MATCHING_ENGINE_PORT:-8101}"
+    env_file:
+      - .env
+    environment:
+      GO_ENV: production
+      GOMAXPROCS: "2"
+      GOMEMLIMIT: "900MiB"
+    # 針對壓測設定資源限制 (撮合引擎通常需要較多 CPU)
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1024M
+
+  order-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: order-service
+    container_name: exchange-order-service-prod
+    ports:
+      - "${ORDER_SERVICE_PORT:-8103}:${ORDER_SERVICE_PORT:-8103}"
+    env_file:
+      - .env
+    environment:
+      GO_ENV: production
+      GOMAXPROCS: "1"
+      GOMEMLIMIT: "450MiB"
+    # 針對壓測設定資源限制
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    depends_on:
+      - matching-engine
+
+  market-data-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: market-data-service
+    container_name: exchange-market-data-service-prod
+    ports:
+      - "${MARKET_DATA_PORT:-8102}:${MARKET_DATA_PORT:-8102}"
+    env_file:
+      - .env
+    environment:
+      GO_ENV: production
+      GOMAXPROCS: "1"
+      GOMEMLIMIT: "450MiB"
+    # 針對壓測設定資源限制
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    depends_on:
+      - matching-engine
+      - order-service

@@ -83,6 +83,10 @@ dev-down: ## 停止開發環境
 	@echo "🛑 停止開發環境..."
 	docker compose -f docker-compose.dev.yml down
 
+dev-build: ## 編譯 Docker 鏡像
+	@echo "🐳 編譯 Docker 鏡像..."
+	docker compose -f docker-compose.dev.yml up -d --build
+
 dev-logs: ## 查看開發環境日誌
 	docker compose -f docker-compose.dev.yml logs -f ${SERVICE_NAME:-gateway}
 
