@@ -57,6 +57,8 @@ func (s *ExchangeServiceImpl) HandleSettlementEvent(ctx context.Context, key, va
 // executeSettlementTx 執行原子結算事務（TX2）。
 // 與 PlaceOrder 同步模式的 TX2 邏輯完全一致，確保資金安全與訂單狀態正確。
 func (s *ExchangeServiceImpl) executeSettlementTx(ctx context.Context, event *SettlementRequestedEvent) error {
+	var updatedOrders []*Order
+
 	err := s.txManager.ExecTx(ctx, func(ctx context.Context) error {
 
 		// === Phase 1: 資源標準化排序與取得 Order 排他鎖 ===
@@ -190,6 +192,7 @@ func (s *ExchangeServiceImpl) executeSettlementTx(ctx context.Context, event *Se
 			if err := s.orderRepo.UpdateOrder(ctx, orderToSave); err != nil {
 				return fmt.Errorf("更新訂單狀態失敗 (ID: %s): %w", id, err)
 			}
+			updatedOrders = append(updatedOrders, cloneOrder(orderToSave))
 			if s.tradeListener != nil {
 				s.tradeListener.OnOrderUpdate(orderToSave)
 			}
@@ -231,6 +234,31 @@ func (s *ExchangeServiceImpl) executeSettlementTx(ctx context.Context, event *Se
 			zap.String("taker_order_id", event.TakerOrderID.String()),
 			zap.Error(err),
 		)
+		return err
 	}
-	return err
+
+	if s.eventBus != nil {
+		for _, order := range updatedOrders {
+			event := &OrderUpdatedEvent{
+				EventType: EventOrderUpdated,
+				Symbol:    order.Symbol,
+				Order:     order,
+			}
+			publishCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if perr := s.eventBus.Publish(publishCtx, TopicOrderUpdates, order.Symbol, event); perr != nil {
+				logger.Error("發布 OrderUpdatedEvent 失敗", zap.String("order_id", order.ID.String()), zap.Error(perr))
+			}
+			cancel()
+		}
+	}
+
+	return nil
+}
+
+func cloneOrder(order *Order) *Order {
+	if order == nil {
+		return nil
+	}
+	copyOrder := *order
+	return &copyOrder
 }

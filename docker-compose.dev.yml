@@ -1,16 +1,105 @@
-version: "3.8"
-
 services:
-  app:
+  # ----------------------------------------------------------
+  # 微服務
+  # ----------------------------------------------------------
+
+  gateway:
     build:
       context: .
       dockerfile: Dockerfile.dev
-    container_name: exchange-app-dev
+    container_name: exchange-gateway
+    command: air -c .air.gateway.toml
     ports:
-      - "8080:8080"
+      - "8084:8084"
     volumes:
       - .:/app
     env_file:
       - .env
     environment:
-      - GO_ENV=development
+      GO_ENV: development
+      GATEWAY_PORT: "8084"
+      ORDER_SERVICE_URL: http://order-service:8080
+      MARKET_DATA_SERVICE_URL: http://market-data-service:8083
+    depends_on:
+      order-service:
+        condition: service_healthy
+      market-data-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8084/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  matching-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: exchange-matching-engine
+    command: air -c .air.matching-engine.toml
+    ports:
+      - "8081:8081" # health check
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      GO_ENV: development
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  order-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: exchange-order-service
+    command: air -c .air.order-service.toml
+    ports:
+      - "8080:8080" # HTTP API
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      GO_ENV: development
+    depends_on:
+      matching-engine:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  market-data-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: exchange-market-data-service
+    command: air -c .air.market-data-service.toml
+    ports:
+      - "8083:8083"
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      GO_ENV: development
+      MARKET_DATA_PORT: "8083"
+    depends_on:
+      matching-engine:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8083/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s

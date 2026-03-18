@@ -1,0 +1,11 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+cmd = "go build -o ./tmp/market-data-service ./cmd/market-data-service"
+bin = "./tmp/market-data-service"
+include_ext = ["go"]
+exclude_dir = ["tmp", "vendor", "frontend", "node_modules"]
+
+[log]
+time = true

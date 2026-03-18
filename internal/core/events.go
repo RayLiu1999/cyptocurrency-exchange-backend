@@ -10,10 +10,11 @@ import (
 // 定義在 Core 層，確保 Core 不依賴 Infrastructure
 
 const (
-	TopicOrders      = "exchange.orders"      // 下單 & 撤單命令 (Partition Key = symbol)
-	TopicSettlements = "exchange.settlements" // 撮合完成後的結算請求
-	TopicTrades      = "exchange.trades"      // 個別成交事件（供外部訂閱）
-	TopicOrderBook   = "exchange.orderbook"   // 掜單簿快照更新
+	TopicOrders       = "exchange.orders"        // 下單 & 撤單命令 (Partition Key = symbol)
+	TopicSettlements  = "exchange.settlements"   // 撮合完成後的結算請求
+	TopicTrades       = "exchange.trades"        // 個別成交事件（供外部訂閱）
+	TopicOrderBook    = "exchange.orderbook"     // 掜單簿快照更新
+	TopicOrderUpdates = "exchange.order_updates" // 訂單狀態更新（供 WS / 通知服務訂閱）
 )
 
 // --- EventType 常數 ---
@@ -27,6 +28,7 @@ const (
 	EventSettlementRequested  EventType = "settlement.requested"   // 撮合完成，等待結算（包含無成交的市價單退款）
 	EventTradeExecuted        EventType = "trade.executed"         // 個別成交事件（供 WebSocket 推播與外部訂閱）
 	EventOrderBookUpdated     EventType = "orderbook.updated"      // 掜單簿快照更新事件（撮合完成或撤單後觸發）
+	EventOrderUpdated         EventType = "order.updated"          // 訂單狀態更新事件（供 WebSocket / 通知服務）
 )
 
 // --- 事件結構體 ---
@@ -87,4 +89,11 @@ type OrderBookUpdatedEvent struct {
 	EventType EventType                   `json:"event_type"`
 	Symbol    string                      `json:"symbol"`
 	Snapshot  *matching.OrderBookSnapshot `json:"snapshot"`
+}
+
+// OrderUpdatedEvent 訂單狀態更新事件（結算完成、撤單完成等）
+type OrderUpdatedEvent struct {
+	EventType EventType `json:"event_type"`
+	Symbol    string    `json:"symbol"`
+	Order     *Order    `json:"order"`
 }

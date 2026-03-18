@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/RayLiu1999/exchange/internal/core/matching"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
+	"go.uber.org/zap"
 )
 
 // PlaceOrder 處理下單請求
@@ -343,6 +345,20 @@ func (s *ExchangeServiceImpl) CancelOrder(ctx context.Context, orderID, userID u
 			if err := s.eventBus.Publish(ctx, TopicOrders, orderPreCheck.Symbol, event); err != nil {
 				log.Printf("發布 OrderCancelRequestedEvent 失敗: %v", err)
 			}
+
+			updatedOrder, getErr := s.orderRepo.GetOrder(context.Background(), orderID)
+			if getErr == nil {
+				updateEvent := &OrderUpdatedEvent{
+					EventType: EventOrderUpdated,
+					Symbol:    updatedOrder.Symbol,
+					Order:     cloneOrder(updatedOrder),
+				}
+				publishCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				if publishErr := s.eventBus.Publish(publishCtx, TopicOrderUpdates, updatedOrder.Symbol, updateEvent); publishErr != nil {
+					log.Printf("發布 OrderUpdatedEvent 失敗: %v", publishErr)
+				}
+				cancel()
+			}
 		} else {
 			// 無 Kafka Fallback：同步取消記憶體引擎中的訂單
 			engine := s.engineManager.GetEngine(orderPreCheck.Symbol)
@@ -385,8 +401,10 @@ func (s *ExchangeServiceImpl) calculateLockAmount(order *Order) (currency string
 		if order.Type == TypeLimit {
 			return quote, order.Price.Mul(order.Quantity), nil
 		}
-		engine := s.engineManager.GetEngine(order.Symbol)
-		estimatedFunds, err := engine.EstimateMarketBuyRequiredFunds(order.Quantity)
+		// 市價買單：估算所需資金
+		// 微服務模式（eventBus != nil）：從 Redis 讀取訂單簿快照，避免讀空的記憶體引擎
+		// 單體模式（eventBus == nil）：直接讀記憶體撮合引擎
+		estimatedFunds, err := s.estimateMarketBuyFunds(order.Symbol, order.Quantity)
 		if err != nil {
 			return "", decimal.Zero, fmt.Errorf("市價單預估資金失敗: %w", err)
 		}
@@ -394,6 +412,41 @@ func (s *ExchangeServiceImpl) calculateLockAmount(order *Order) (currency string
 		return quote, lockedFunds, nil
 	}
 	return base, order.Quantity, nil
+}
+
+// estimateMarketBuyFunds 預估市價買單所需資金
+// 微服務模式：優先從 Redis 快取讀取訂單簿（matching-engine 持續更新）
+// 單體模式：從記憶體撮合引擎讀取
+func (s *ExchangeServiceImpl) estimateMarketBuyFunds(symbol string, quantity decimal.Decimal) (decimal.Decimal, error) {
+	if s.eventBus != nil && s.cacheRepo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		snapshot, err := s.cacheRepo.GetOrderBookSnapshot(ctx, symbol)
+		if err == nil && snapshot != nil && len(snapshot.Asks) > 0 {
+			return estimateFromSnapshotAsks(snapshot.Asks, quantity)
+		}
+		logger.Log.Warn("Redis 訂單簿快取未命中，退回記憶體引擎估算", zap.String("symbol", symbol))
+	}
+	engine := s.engineManager.GetEngine(symbol)
+	return engine.EstimateMarketBuyRequiredFunds(quantity)
+}
+
+// estimateFromSnapshotAsks 從訂單簿快照的賣單估算市價買單所需資金（與 OrderBook.EstimateMarketBuyRequiredFunds 邏輯相同）
+func estimateFromSnapshotAsks(asks []matching.OrderBookLevel, quantity decimal.Decimal) (decimal.Decimal, error) {
+	remainingQty := quantity
+	totalCost := decimal.Zero
+	for _, ask := range asks {
+		matchQty := remainingQty
+		if ask.Quantity.LessThan(matchQty) {
+			matchQty = ask.Quantity
+		}
+		totalCost = totalCost.Add(ask.Price.Mul(matchQty))
+		remainingQty = remainingQty.Sub(matchQty)
+		if remainingQty.IsZero() {
+			return totalCost, nil
+		}
+	}
+	return decimal.Zero, fmt.Errorf("insufficient liquidity to fulfill market buy (remaining: %s)", remainingQty)
 }
 
 // calculateUnlockAmount 計算解鎖資金

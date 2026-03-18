@@ -172,7 +172,7 @@ func main() {
 	// API v1 Routing Group，掛載 5. HTTP Handler
 	handler := api.NewHandler(svc, sim)
 	v1 := r.Group("/api/v1")
-	handler.RegisterRoutes(v1, publicLimiter, privateLimiter, idempStore)
+	handler.RegisterRoutesWithMiddleware(v1, publicLimiter, privateLimiter, idempStore)
 
 	// Health Check（ALB 與 ECS 健康檢查用，不需要驗證或限流）
 	r.GET("/health", func(c *gin.Context) {

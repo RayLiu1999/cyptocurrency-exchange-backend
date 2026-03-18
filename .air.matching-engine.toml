@@ -1,0 +1,11 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+cmd = "go build -o ./tmp/matching-engine ./cmd/matching-engine"
+bin = "./tmp/matching-engine"
+include_ext = ["go"]
+exclude_dir = ["tmp", "vendor", "frontend", "node_modules"]
+
+[log]
+time = true

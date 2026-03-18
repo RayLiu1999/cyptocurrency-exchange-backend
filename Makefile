@@ -1,10 +1,10 @@
-.PHONY: build test lint fmt tidy clean dev-up dev-down dev-logs prod-up prod-down prod-logs db-migrate db-seed db-fresh help
+.PHONY: build build-server build-gateway build-order-service build-matching-engine build-market-data-service test lint fmt tidy clean dev-up dev-down dev-logs prod-up prod-down prod-logs db-migrate db-seed db-fresh help
 
 # 變數定義
 BUILD_DIR=.
 DB_USER=user
 DB_NAME=exchange
-BASE_URL ?= http://localhost:8080/api/v1
+BASE_URL ?= http://localhost:8082/api/v1
 SYMBOL ?= BTC-USD
 K6_ENV_FLAGS ?=
 
@@ -18,10 +18,33 @@ help: ## 顯示所有可用指令
 	@echo "可用指令:"
 	@grep -h -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-build: ## 編譯專案 (本地)
-	@echo "📦 編譯專案..."
-	go build -o $(BUILD_DIR)/server cmd/server/main.go
+build: build-gateway build-order-service build-matching-engine build-market-data-service ## 編譯微服務專案 (本地)
+	@echo "✅ 微服務編譯完成"
+
+build-server: ## 編譯單體版本 (相容保留)
+	@echo "📦 編譯單體版本..."
+	go build -o $(BUILD_DIR)/server ./cmd/server
 	@echo "✅ 編譯完成: ./server"
+
+build-gateway: ## 編譯 gateway
+	@echo "📦 編譯 gateway..."
+	go build -o $(BUILD_DIR)/gateway ./cmd/gateway
+	@echo "✅ 編譯完成: ./gateway"
+
+build-order-service: ## 編譯 order-service
+	@echo "📦 編譯 order-service..."
+	go build -o $(BUILD_DIR)/order-service ./cmd/order-service
+	@echo "✅ 編譯完成: ./order-service"
+
+build-matching-engine: ## 編譯 matching-engine
+	@echo "📦 編譯 matching-engine..."
+	go build -o $(BUILD_DIR)/matching-engine ./cmd/matching-engine
+	@echo "✅ 編譯完成: ./matching-engine"
+
+build-market-data-service: ## 編譯 market-data-service
+	@echo "📦 編譯 market-data-service..."
+	go build -o $(BUILD_DIR)/market-data-service ./cmd/market-data-service
+	@echo "✅ 編譯完成: ./market-data-service"
 
 test: ## 執行基礎單元測試 (不含整合測試)
 	@echo "🧪 執行基礎單元測試..."
@@ -53,7 +76,7 @@ test-coverage: ## 執行測試並產生覆蓋率報告
 # --- Docker 開發環境 (Air 熱重載) ---
 
 dev-up: ## 啟動開發環境 (含 Air 熱重載)
-	@echo "🚀 啟動開發環境 (Air)..."
+	@echo "🚀 啟動開發環境 (Air，預設假設 infra 已由外部容器提供)..."
 	docker compose -f docker-compose.dev.yml up -d
 
 dev-down: ## 停止開發環境
@@ -61,7 +84,7 @@ dev-down: ## 停止開發環境
 	docker compose -f docker-compose.dev.yml down
 
 dev-logs: ## 查看開發環境日誌
-	docker compose -f docker-compose.dev.yml logs -f app
+	docker compose -f docker-compose.dev.yml logs -f ${SERVICE_NAME:-gateway}
 
 # --- Docker 生產環境 ---
 
@@ -113,6 +136,10 @@ tidy: ## 整理依賴
 clean: ## 清理編譯檔案與暫存
 	@echo "🧹 清理編譯檔案..."
 	rm -f $(BUILD_DIR)/server
+	rm -f $(BUILD_DIR)/gateway
+	rm -f $(BUILD_DIR)/order-service
+	rm -f $(BUILD_DIR)/matching-engine
+	rm -f $(BUILD_DIR)/market-data-service
 	rm -f coverage.txt coverage.html
 	@echo "✅ 清理完成"
 

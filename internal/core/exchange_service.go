@@ -124,6 +124,7 @@ var _ ExchangeService = (*ExchangeServiceImpl)(nil)
 
 // OnOrderBookUpdate 當訂單簿有變化時被呼叫
 // [Redis 升級] 除了通知 Frontend，也非同步更新 Redis 快取
+// [微服務升級] 若 tradeListener 為 nil（matching-engine 獨立進程），改透過 Kafka 通知 order-service 推播 WS
 func (s *ExchangeServiceImpl) OnOrderBookUpdate(snapshot *matching.OrderBookSnapshot) {
 	if s.cacheRepo != nil {
 		go func() {
@@ -136,7 +137,20 @@ func (s *ExchangeServiceImpl) OnOrderBookUpdate(snapshot *matching.OrderBookSnap
 	}
 
 	if s.tradeListener != nil {
+		// 同進程模式（單體 或 order-service 直接呼叫）
 		s.tradeListener.OnOrderBookUpdate(snapshot)
+	} else if s.eventBus != nil {
+		// 微服務獨立進程模式：matching-engine 透過 Kafka 通知 order-service 推播 WS
+		event := &OrderBookUpdatedEvent{
+			EventType: EventOrderBookUpdated,
+			Symbol:    snapshot.Symbol,
+			Snapshot:  snapshot,
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := s.eventBus.Publish(ctx, TopicOrderBook, snapshot.Symbol, event); err != nil {
+			logger.Error("發布 OrderBookUpdatedEvent 至 Kafka 失敗", zap.Error(err))
+		}
 	}
 }
 

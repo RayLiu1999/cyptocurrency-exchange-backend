@@ -8,6 +8,7 @@ import (
 
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 	"go.uber.org/zap"
 )
 
@@ -71,6 +72,40 @@ func (p *Producer) Publish(ctx context.Context, topic, key string, payload inter
 		return fmt.Errorf("發布事件失敗: %w", err)
 	}
 
+	return nil
+}
+
+// CreateTopics 建立指定 Kafka 主題（若已存在則忽略）
+// 使用 kmsg 直接透過現有 kgo.Client 送出 CreateTopicsRequest，無需額外 Admin Client。
+// 適合服務啟動時確保所有 topic 存在，避免 UNKNOWN_TOPIC_OR_PARTITION 錯誤。
+func (p *Producer) CreateTopics(ctx context.Context, topics []string) error {
+	req := &kmsg.CreateTopicsRequest{
+		TimeoutMillis: 10000,
+		Topics:        make([]kmsg.CreateTopicsRequestTopic, 0, len(topics)),
+	}
+	for _, topic := range topics {
+		req.Topics = append(req.Topics, kmsg.CreateTopicsRequestTopic{
+			Topic:             topic,
+			NumPartitions:     1,
+			ReplicationFactor: 1,
+		})
+	}
+
+	kresp, err := p.client.Request(ctx, req)
+	if err != nil {
+		return fmt.Errorf("CreateTopics 請求失敗: %w", err)
+	}
+
+	resp := kresp.(*kmsg.CreateTopicsResponse)
+	for _, t := range resp.Topics {
+		// ErrorCode 36 = TOPIC_ALREADY_EXISTS，視為成功
+		if t.ErrorCode != 0 && t.ErrorCode != 36 {
+			logger.Log.Warn("建立 Kafka topic 失敗（可能已存在）",
+				zap.String("topic", t.Topic),
+				zap.Int16("errorCode", t.ErrorCode),
+			)
+		}
+	}
 	return nil
 }
 

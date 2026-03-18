@@ -134,7 +134,7 @@ func setupRouter(svc core.ExchangeService) *gin.Engine {
 	// 確保既有測試不被安全機制攔截，同時保持 RegisterRoutes 的介面一致性
 	noopLimiter := middleware.NewMemoryRateLimiter(1000, 1000, time.Minute)
 	idempStore := middleware.NewMemoryIdempotencyStore()
-	handler.RegisterRoutes(r, noopLimiter, noopLimiter, idempStore)
+	handler.RegisterRoutesWithMiddleware(r, noopLimiter, noopLimiter, idempStore)
 	return r
 }
 

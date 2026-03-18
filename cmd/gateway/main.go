@@ -1,0 +1,169 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
+	infraredis "github.com/RayLiu1999/exchange/internal/infrastructure/redis"
+	"github.com/RayLiu1999/exchange/internal/middleware"
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+)
+
+func main() {
+	defer logger.Sync()
+
+	port := os.Getenv("GATEWAY_PORT")
+	if port == "" {
+		port = "8082"
+	}
+
+	orderServiceURL := os.Getenv("ORDER_SERVICE_URL")
+	if orderServiceURL == "" {
+		orderServiceURL = "http://localhost:8080"
+	}
+	marketDataURL := os.Getenv("MARKET_DATA_SERVICE_URL")
+	if marketDataURL == "" {
+		marketDataURL = "http://localhost:8083"
+	}
+
+	orderTargetURL, err := url.Parse(orderServiceURL)
+	if err != nil {
+		logger.Log.Fatal("gateway: ORDER_SERVICE_URL 格式錯誤", zap.String("url", orderServiceURL), zap.Error(err))
+	}
+	marketTargetURL, err := url.Parse(marketDataURL)
+	if err != nil {
+		logger.Log.Fatal("gateway: MARKET_DATA_SERVICE_URL 格式錯誤", zap.String("url", marketDataURL), zap.Error(err))
+	}
+
+	redisCfg := infraredis.DefaultConfig()
+	if redisAddr := os.Getenv("REDIS_URL"); redisAddr != "" {
+		redisCfg.Addr = redisAddr
+	}
+	redisClient, redisErr := infraredis.NewClient(redisCfg)
+	if redisErr != nil {
+		logger.Log.Warn("gateway: Redis 不可用，安全 middleware 退回記憶體模式", zap.Error(redisErr))
+	}
+
+	var publicLimiter middleware.RateLimiter
+	var privateLimiter middleware.RateLimiter
+	var idempStore middleware.IdempotencyStore
+	if redisClient != nil {
+		publicLimiter = middleware.NewRedisRateLimiter(redisClient, 60, time.Minute)
+		privateLimiter = middleware.NewRedisRateLimiter(redisClient, 10, time.Second)
+		idempStore = middleware.NewRedisIdempotencyStore(redisClient)
+	} else {
+		publicLimiter = middleware.NewMemoryRateLimiter(1, 60, 10*time.Minute)
+		privateLimiter = middleware.NewMemoryRateLimiter(10, 10, 10*time.Minute)
+		idempStore = middleware.NewMemoryIdempotencyStore()
+	}
+
+	orderProxy := newReverseProxy(orderTargetURL)
+	marketProxy := newReverseProxy(marketTargetURL)
+
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"status":              "ok",
+			"service":             "gateway",
+			"order_service":       orderTargetURL.String(),
+			"market_data_service": marketTargetURL.String(),
+		})
+	})
+	r.Any("/ws", gin.WrapH(marketProxy))
+	r.Any("/docs/*path", gin.WrapH(orderProxy))
+	r.Any("/swagger/*path", gin.WrapH(orderProxy))
+
+	apiGroup := r.Group("/api/v1")
+	{
+		public := apiGroup.Group("/")
+		public.Use(middleware.RateLimitMiddleware(publicLimiter))
+		public.GET("/orderbook", gin.WrapH(orderProxy))
+		public.GET("/klines", gin.WrapH(orderProxy))
+		public.GET("/trades", gin.WrapH(orderProxy))
+
+		private := apiGroup.Group("/")
+		private.Use(middleware.RateLimitMiddleware(privateLimiter))
+		private.GET("/orders", gin.WrapH(orderProxy))
+		private.GET("/orders/:id", gin.WrapH(orderProxy))
+		private.DELETE("/orders/:id", gin.WrapH(orderProxy))
+		private.GET("/accounts", gin.WrapH(orderProxy))
+		private.POST("/simulation/start", gin.WrapH(orderProxy))
+		private.POST("/simulation/stop", gin.WrapH(orderProxy))
+		private.GET("/simulation/status", gin.WrapH(orderProxy))
+		private.DELETE("/simulation/data", gin.WrapH(orderProxy))
+		private.POST("/test/join", gin.WrapH(orderProxy))
+
+		orders := apiGroup.Group("/")
+		orders.Use(middleware.RateLimitMiddleware(privateLimiter))
+		orders.Use(middleware.IdempotencyMiddleware(idempStore, 24*time.Hour))
+		orders.POST("/orders", gin.WrapH(orderProxy))
+	}
+	r.NoRoute(gin.WrapH(orderProxy))
+
+	srv := &http.Server{
+		Addr:              fmt.Sprintf(":%s", port),
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go func() {
+		logger.Log.Info("gateway 啟動完成", zap.String("port", port), zap.String("order_upstream", orderTargetURL.String()), zap.String("market_upstream", marketTargetURL.String()))
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Log.Fatal("gateway 啟動失敗", zap.Error(err))
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	sig := <-quit
+	logger.Log.Info("gateway 收到關閉訊號", zap.String("signal", sig.String()))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		logger.Log.Error("gateway 關閉失敗", zap.Error(err))
+		return
+	}
+	logger.Log.Info("gateway 已完成關閉")
+}
+
+func writeJSON(w http.ResponseWriter, statusCode int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		logger.Log.Error("gateway: JSON 回應寫入失敗", zap.Error(err))
+	}
+}
+
+func newReverseProxy(targetURL *url.URL) *httputil.ReverseProxy {
+	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		req.Header.Set("X-Forwarded-Host", req.Host)
+		if req.TLS != nil {
+			req.Header.Set("X-Forwarded-Proto", "https")
+			return
+		}
+		req.Header.Set("X-Forwarded-Proto", "http")
+	}
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		logger.Log.Error("gateway: 反向代理失敗", zap.String("path", r.URL.Path), zap.Error(err))
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"error":   "upstream unavailable",
+			"service": "gateway",
+		})
+	}
+	return proxy
+}

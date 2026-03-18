@@ -1,0 +1,11 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+cmd = "go build -o ./tmp/order-service ./cmd/order-service"
+bin = "./tmp/order-service"
+include_ext = ["go"]
+exclude_dir = ["tmp", "vendor", "frontend", "node_modules"]
+
+[log]
+time = true
