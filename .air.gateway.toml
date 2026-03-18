@@ -1,11 +1,11 @@
 root = "."
-tmp_dir = "tmp"
+tmp_dir = "/tmp"
 
 [build]
-cmd = "go build -o ./tmp/gateway ./cmd/gateway"
-bin = "./tmp/gateway"
+cmd = "go build -o /tmp/gateway ./cmd/gateway"
+bin = "/tmp/gateway"
 include_ext = ["go"]
-exclude_dir = ["tmp", "vendor", "frontend", "node_modules"]
+exclude_dir = ["tmp", "vendor", "frontend", "node_modules", "backups", "chart", "docs", "deploy", "scripts", "sql", ".git", ".agent", ".github", ".playwright-mcp"]
 
 [log]
 time = true
