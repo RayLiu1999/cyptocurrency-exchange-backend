@@ -81,8 +81,8 @@ func main() {
 		kafkaCfg.AllowAutoTopicCreation = false
 	} else if os.Getenv("KAFKA_ALLOW_AUTO_CREATE") == "true" {
 		kafkaCfg.AllowAutoTopicCreation = true
-	} else if os.Getenv("NODE_ENV") == "production" {
-		// 根據環境變數安全退避：NODE_ENV=production 時由 DefaultConfig 的 true 改為 false
+	} else if os.Getenv("GO_ENV") == "production" {
+		// 根據環境變數安全退避：GO_ENV=production 時由 DefaultConfig 的 true 改為 false
 		kafkaCfg.AllowAutoTopicCreation = false
 	}
 

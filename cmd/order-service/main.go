@@ -81,7 +81,7 @@ func main() {
 		kafkaCfg.AllowAutoTopicCreation = false
 	} else if os.Getenv("KAFKA_ALLOW_AUTO_CREATE") == "true" {
 		kafkaCfg.AllowAutoTopicCreation = true
-	} else if os.Getenv("NODE_ENV") == "production" {
+	} else if os.Getenv("GO_ENV") == "production" {
 		kafkaCfg.AllowAutoTopicCreation = false
 	}
 
@@ -156,11 +156,16 @@ func main() {
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, url))
 
 	// 8. Start HTTP server
-	srv := &http.Server{Addr: ":8080", Handler: r}
+	port := os.Getenv("ORDER_SERVICE_PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	srv := &http.Server{Addr: ":" + port, Handler: r}
 	go func() {
-		logger.Info("order-service started on :8080", zap.String("port", ":8080"))
+		logger.Info("order-service started", zap.String("port", ":"+port))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("order-service failed to start", zap.Error(err))
+			logger.Error("listen", zap.Error(err))
 		}
 	}()
 

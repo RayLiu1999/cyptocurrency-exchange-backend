@@ -33,7 +33,7 @@
           "value": "redpanda.exchange.internal:9092"
         },
         {
-          "name": "NODE_ENV",
+          "name": "GO_ENV",
           "value": "production"
         },
         {

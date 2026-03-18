@@ -131,9 +131,14 @@ func main() {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "matching-engine"})
 	})
-	srv := &http.Server{Addr: ":8081", Handler: r}
+	port := os.Getenv("MATCHING_ENGINE_PORT")
+	if port == "" {
+		port = "8081"
+	}
+
+	srv := &http.Server{Addr: ":" + port, Handler: r}
 	go func() {
-		logger.Log.Info("Health check server started on :8081")
+		logger.Log.Info("Health check server started on :" + port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Log.Error("Health check server error", zap.Error(err))
 		}
