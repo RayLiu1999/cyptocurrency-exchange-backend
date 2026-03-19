@@ -81,7 +81,7 @@ func main() {
 		kafkaCfg.AllowAutoTopicCreation = false
 	} else if os.Getenv("KAFKA_ALLOW_AUTO_CREATE") == "true" {
 		kafkaCfg.AllowAutoTopicCreation = true
-	} else if os.Getenv("GO_ENV") == "production" {
+	} else if os.Getenv("GIN_MODE") == "release" {
 		kafkaCfg.AllowAutoTopicCreation = false
 	}
 

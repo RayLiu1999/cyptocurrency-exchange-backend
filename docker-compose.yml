@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   # ----------------------------------------------------------
   # Production / Load Testing Environment
@@ -17,7 +15,7 @@ services:
     env_file:
       - .env
     environment:
-      GO_ENV: production
+      GIN_MODE: release
       GOMAXPROCS: "1"
       GOMEMLIMIT: "450MiB"
     # 針對壓測設定資源限制
@@ -42,7 +40,7 @@ services:
     env_file:
       - .env
     environment:
-      GO_ENV: production
+      GIN_MODE: release
       GOMAXPROCS: "2"
       GOMEMLIMIT: "900MiB"
     # 針對壓測設定資源限制 (撮合引擎通常需要較多 CPU)
@@ -64,7 +62,7 @@ services:
     env_file:
       - .env
     environment:
-      GO_ENV: production
+      GIN_MODE: release
       GOMAXPROCS: "1"
       GOMEMLIMIT: "450MiB"
     # 針對壓測設定資源限制
@@ -88,7 +86,7 @@ services:
     env_file:
       - .env
     environment:
-      GO_ENV: production
+      GIN_MODE: release
       GOMAXPROCS: "1"
       GOMEMLIMIT: "450MiB"
     # 針對壓測設定資源限制

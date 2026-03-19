@@ -127,10 +127,10 @@ module "alb" {
 # SSM Parameters：非機密環境設定
 # 機密（db_password 等）已在 data module 中設定
 # ------------------------------------------------------------------------------
-resource "aws_ssm_parameter" "go_env" {
-  name  = "/${var.project_name}/${var.environment}/GO_ENV"
+resource "aws_ssm_parameter" "gin_mode" {
+  name  = "/${var.project_name}/${var.environment}/GIN_MODE"
   type  = "String"
-  value = "production"
+  value = "release"
   tags  = local.common_tags
 }
 
