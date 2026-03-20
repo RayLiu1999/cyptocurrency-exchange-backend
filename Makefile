@@ -2,9 +2,9 @@
 
 # 變數定義
 BUILD_DIR=.
-DB_USER=user
+DB_USER=postgres
 DB_NAME=exchange
-BASE_URL ?= http://localhost:8082/api/v1
+BASE_URL ?= http://localhost:8100/api/v1
 SYMBOL ?= BTC-USD
 K6_ENV_FLAGS ?=
 
@@ -67,6 +67,21 @@ smoke-test: ## 執行 k6 冒煙測試（核心交易流程）
 	@echo "> k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env SYMBOL=$(SYMBOL) scripts/k6/smoke-test.js"
 	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env SYMBOL=$(SYMBOL) scripts/k6/smoke-test.js
 
+load-test: ## 執行 k6 負載測試
+	@echo "🔥 執行 k6 負載測試..."
+	@echo "> k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) scripts/k6/load-test.js"
+	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) scripts/k6/load-test.js
+
+spike-test: ## 執行 k6 尖峰測試
+	@echo "🔥 執行 k6 尖峰測試..."
+	@echo "> k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) scripts/k6/spike-test.js"
+	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) scripts/k6/spike-test.js
+
+ws-fanout-test: ## 執行 k6 WebSocket 扇出測試
+	@echo "🔥 執行 k6 WebSocket 扇出測試..."
+	@echo "> k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) scripts/k6/ws-fanout-test.js"
+	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) scripts/k6/ws-fanout-test.js
+
 test-coverage: ## 執行測試並產生覆蓋率報告
 	@echo "📊 產生測試覆蓋率..."
 	go test -coverprofile=coverage.txt -covermode=atomic ./...
@@ -101,7 +116,7 @@ prod-down: ## 停止生產環境容器
 	docker compose down
 
 prod-logs: ## 查看生產環境日誌
-	docker compose logs -f app
+	docker compose logs -f ${SERVICE_NAME:-gateway}
 
 # --- 資料庫輔助指令 (需確保 Postgres 容器已啟動) ---
 
