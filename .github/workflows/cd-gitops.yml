@@ -1,0 +1,119 @@
+name: Backend CD GitOps
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: rayliu1999
+  OPS_REPO: RayLiu1999/side_project_ops
+  OPS_REPO_PATH: projects/crypto-exchange/backend
+
+jobs:
+  build-and-push:
+    name: Build and Push Images
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service_name: gateway
+            image_name: exchange-gateway
+          - service_name: order-service
+            image_name: exchange-order-service
+          - service_name: matching-engine
+            image_name: exchange-matching-engine
+          - service_name: market-data-service
+            image_name: exchange-market-data-service
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image_name }}
+          tags: |
+            type=sha,format=short
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          build-args: |
+            SERVICE_NAME=${{ matrix.service_name }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  update-gitops:
+    name: Update GitOps Manifests
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout app repo
+        uses: actions/checkout@v4
+
+      - name: Checkout ops repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.OPS_REPO }}
+          token: ${{ secrets.OPS_REPO_PUSH_TOKEN }}
+          path: ops-repo
+
+      - name: Update image tags in GitOps repo
+        run: |
+          set -euo pipefail
+          IMAGE_TAG="sha-$(git rev-parse --short=7 "$GITHUB_SHA")"
+
+          update_image() {
+            local file="$1"
+            local image="$2"
+            sed -i.bak -E "s|image: ${image}:.*$|image: ${image}:${IMAGE_TAG}|" "$file"
+            rm -f "${file}.bak"
+          }
+
+          update_image "ops-repo/${OPS_REPO_PATH}/gateway/deployment.yaml" "ghcr.io/${IMAGE_OWNER}/exchange-gateway"
+          update_image "ops-repo/${OPS_REPO_PATH}/order-service/deployment.yaml" "ghcr.io/${IMAGE_OWNER}/exchange-order-service"
+          update_image "ops-repo/${OPS_REPO_PATH}/matching-engine/deployment.yaml" "ghcr.io/${IMAGE_OWNER}/exchange-matching-engine"
+          update_image "ops-repo/${OPS_REPO_PATH}/market-data-service/deployment.yaml" "ghcr.io/${IMAGE_OWNER}/exchange-market-data-service"
+
+      - name: Commit and push GitOps changes
+        run: |
+          set -euo pipefail
+          cd ops-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No GitOps changes to commit"
+            exit 0
+          fi
+
+          git add projects/crypto-exchange/backend/*/deployment.yaml
+          git commit -m "chore(crypto-exchange): update backend images to ${GITHUB_SHA::7}"
+          git push origin HEAD
