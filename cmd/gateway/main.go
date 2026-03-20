@@ -58,12 +58,13 @@ func main() {
 	var privateLimiter middleware.RateLimiter
 	var idempStore middleware.IdempotencyStore
 	if redisClient != nil {
-		publicLimiter = middleware.NewRedisRateLimiter(redisClient, 60, time.Minute)
-		privateLimiter = middleware.NewRedisRateLimiter(redisClient, 10, time.Second)
+		// 為了測試 Spike Test 的限流效果，將上限調低 (100/sec 代表超過此頻率會噴 429)
+		publicLimiter = middleware.NewRedisRateLimiter(redisClient, 200, time.Minute)
+		privateLimiter = middleware.NewRedisRateLimiter(redisClient, 100, time.Second)
 		idempStore = middleware.NewRedisIdempotencyStore(redisClient)
 	} else {
-		publicLimiter = middleware.NewMemoryRateLimiter(1, 60, 10*time.Minute)
-		privateLimiter = middleware.NewMemoryRateLimiter(10, 10, 10*time.Minute)
+		publicLimiter = middleware.NewMemoryRateLimiter(5, 200, 10*time.Minute)
+		privateLimiter = middleware.NewMemoryRateLimiter(100, 100, 10*time.Minute)
 		idempStore = middleware.NewMemoryIdempotencyStore()
 	}
 
