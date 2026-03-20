@@ -1,17 +1,17 @@
 # 專案架構文件 (Architecture Document)
 
-> **本文件為架構的唯一真相來源。** 記錄從當前單體架構到最終 CCXT 多交易所平台的完整演進路徑。
+> **本文件為架構的唯一真相來源。** 記錄從目前本地微服務 MVP，到 ECS 壓測，再到最終 CCXT 多交易所平台的完整演進路徑。
 
 ---
 
 ## 0. 專案目標與演進路線
 
 ```
-現在                        近期目標                    長期目標
-─────────────────────────────────────────────────────────────────────
-單體 Go Server          → Redis + Kafka 非同步     → CCXT 多交易所
-+ PostgreSQL            → ECS 微服務壓力測試       → 策略回測平台
-(本地穩定運行)          → 學習 AWS 各項功能         → TimescaleDB + NATS
+現在                              近期目標                      長期目標
+────────────────────────────────────────────────────────────────────────────
+本地微服務 MVP                → ECS 微服務部署 + 壓力測試     → CCXT 多交易所
++ Gateway / Order / Engine    → CloudWatch / ALB / Auto Scale → 策略回測平台
++ Market-Data + Redis/Kafka   → 驗證瓶頸與可靠性缺口          → TimescaleDB + NATS
 ```
 
 ### 三大階段說明
@@ -19,59 +19,133 @@
 | 階段 | 狀態 | 核心目標 |
 |------|------|----------|
 | **Stage 1：現行單體** | ✅ 完成 | 撮合引擎 MVP，本地可用 |
-| **Stage 2：非同步微服務 + ECS** | 🔄 進行中 | 加 Redis/Kafka，拆微服務，上 ECS 壓測，學 AWS |
-| **Stage 3：CCXT 多交易所平台** | 📋 規劃 | 接入真實行情，實作策略回測 |
+| **Stage 2：非同步微服務 + ECS** | 🔄 進行中 | 已完成本地微服務 MVP，下一步是 ECS 部署、壓測、可靠性補強 |
+| **Stage 3：CCXT 多交易所平台** | 📋 規劃 | 先做雙模式抽象與最小 PAPER mode，再決定真正的多交易所 data plane |
+
+### 目前所在位置
+
+- **目前狀態不是 Stage 1 單體，而是 Stage 2 的後半段。**
+- 更精確地說，當前位置可視為 **Stage 2.5：本地微服務 MVP 已完成，雲端部署與壓測尚未完成**。
+- 已完成的核心能力：
+    - Gateway 負責 API 邊界、限流、冪等性、反向代理
+    - Order Service 負責訂單 API 與訂單生命週期
+    - Matching Engine 負責撮合與事件發布
+    - Market-Data Service 負責 WebSocket 與行情事件扇出
+    - Redis + Kafka 已納入本地微服務資料流
+- 尚未完成的核心能力：
+    - ECS / ALB / CloudWatch 的完整雲端驗證
+    - k6 壓測與瓶頸分析
+    - Outbox / DLQ / Replay / 觀測性 / 恢復流程等 production hardening
 
 ---
 
-## 1. 當前架構：單體 (Current State - Stage 1 ✅)
+## 1. 當前架構：本地微服務 MVP (Current State - Stage 2.5 🔄)
 
 ```mermaid
 graph TD
-    CLIENT["用戶 (瀏覽器 / curl)"]
-    subgraph "本機 / EC2"
-        API["Go Server (Gin)\ncmd/server"]
-        MATCH["Matching Engine\n(In-Memory OrderBook)"]
-        PG[("PostgreSQL")]
-        WS["WebSocket\n即時推送"]
+        CLIENT["前端 / curl / 測試腳本"]
+
+        subgraph "本地 Docker / Dev 環境"
+                GW["Gateway\ncmd/gateway\n:8084"]
+                OS["Order Service\ncmd/order-service\n:8080"]
+                ME["Matching Engine\ncmd/matching-engine\n:8081"]
+                MD["Market-Data Service\ncmd/market-data-service\n:8083"]
+                REDIS[("Redis")]
+                KAFKA[("Kafka / Redpanda")]
+                PG[("PostgreSQL")]
+                MONO["Monolith\ncmd/server\n向後保留"]
     end
 
-    CLIENT -->|HTTP REST| API
-    CLIENT <-->|ws://| WS
-    API --> MATCH
-    MATCH -->|成交結果| PG
-    API --> PG
-    MATCH -->|廣播| WS
+        CLIENT -->|HTTP / WS| GW
+        GW -->|/api/v1/*| OS
+        GW -->|/ws| MD
+
+        OS --> PG
+        OS --> REDIS
+        OS --> KAFKA
+
+        ME --> KAFKA
+        ME --> REDIS
+        ME --> PG
+
+        MD --> KAFKA
+        MD --> REDIS
+        MD -->|Broadcast| CLIENT
+
+        MONO -. 開發/相容模式 .-> PG
 ```
 
 **現行技術棧：**
-- **Web Framework**: Gin
-- **撮合引擎**: 全記憶體 (In-Memory)，Price-Time Priority 演算法
+- **API / Gateway**: Gin + Reverse Proxy
+- **撮合引擎**: In-Memory OrderBook，Price-Time Priority
 - **資料庫**: PostgreSQL（訂單、帳戶、成交記錄）
-- **即時推送**: WebSocket (gorilla/websocket)
+- **快取 / 保護層**: Redis（OrderBook 快取、Rate Limit、Idempotency）
+- **事件匯流排**: Kafka / Redpanda（Orders / Settlements / Trades / OrderBook / OrderUpdates）
+- **即時推送**: WebSocket (gorilla/websocket)，由 Market-Data Service 負責
 - **日誌**: Uber Zap (結構化)
-- **基礎設施 (IaC)**: Terraform (基礎設施) + ecspresso (ECS 部署)
+- **基礎設施 (IaC)**: Terraform + ecspresso
 
 **目錄結構（現行）：**
 ```
 backend/
-├── cmd/server/           # 單體 API 服務進入點
+├── cmd/gateway/          # API Gateway，負責限流/冪等性/路由/WS Proxy
+├── cmd/order-service/    # 訂單 API 與訂單生命週期
+├── cmd/matching-engine/  # 撮合與事件生產者
+├── cmd/market-data-service/ # WebSocket 與行情事件扇出
+├── cmd/server/           # 單體整合模式，向後保留
 ├── cmd/simulator/        # 壓測行情模擬器
 ├── internal/
-│   ├── api/              # HTTP/WS Handler (Gin)
-│   ├── core/             # 領域邏輯：service.go, domain.go, ports.go
+│   ├── api/              # HTTP Handler 與路由註冊
+│   ├── core/             # 領域邏輯、事件契約、Service、Matching
 │   ├── core/matching/    # 撮合引擎核心：engine.go, orderbook.go
+│   ├── middleware/       # Rate Limit / Idempotency / Validation 等邊界保護
 │   ├── repository/       # PostgreSQL 存取層
+│   ├── infrastructure/   # Kafka / Redis / Logger / 其他 Adapter
 │   ├── simulator/        # 模擬下單 Service
-│   └── infrastructure/logger/
+│   └── ...
 ├── sql/                  # schema.sql, seed.sql
 ├── scripts/
 │   └── k6/
-│       └── smoke-test.js     # 單一 k6 冒煙測試腳本
-├── infra/
-│   ├── terraform/        # 基礎設施 (VPC, RDS, ALB, ECS Cluster)
-│   └── ecspresso/        # ECS 服務定義與版本管理 (Task Definition, Service)
+│       └── ...           # k6 腳本與驗證工具
+├── deploy/
+│   ├── terraform/        # AWS 基礎設施與環境配置
+│   └── ecspresso/        # ECS 服務與 Task Definition 管理
 ```
+
+### 1.1 服務責任邊界
+
+| 服務 | 當前責任 | 不負責的事 |
+|------|----------|------------|
+| **Gateway** | 對外入口、Rate Limit、Idempotency、HTTP/WS Proxy | 不負責撮合、不直接操作資料庫 |
+| **Order Service** | 下單/撤單 API、訂單查詢、狀態流轉、資料持久化 | 不負責 WebSocket 扇出 |
+| **Matching Engine** | 讀取訂單事件、撮合、產生 trade/orderbook/order-updates 事件 | 不對外暴露主要 API |
+| **Market-Data Service** | 消費市場事件、管理 WebSocket client、推送成交與深度 | 不處理訂單寫入 |
+| **Monolith** | 單進程開發/回退模式 | 不是目前主線架構 |
+
+### 1.2 當前事件流與 Topic
+
+| Topic | 方向 | 用途 |
+|------|------|------|
+| `exchange.orders` | Order Service → Matching Engine | 新單 / 撤單 / 訂單命令 |
+| `exchange.settlements` | Matching Engine → Order Service | 撮合結果與結算指令 |
+| `exchange.trades` | Matching Engine → Market-Data Service | 即時成交事件 |
+| `exchange.orderbook` | Matching Engine → Market-Data Service | 訂單簿更新 |
+| `exchange.order_updates` | Order Service / Settlement → Market-Data Service | 訂單狀態更新 |
+
+### 1.3 目前已完成與未完成項目
+
+**已完成：**
+- 本地 4 服務拓樸已可運作
+- Gateway 已承接 Rate Limit 與 Idempotency
+- WebSocket 已自 Order Service 抽離至 Market-Data Service
+- Kafka 事件流已串起 Order Service / Matching Engine / Market-Data Service
+- 前端對外仍可透過單一 Gateway 存取 HTTP 與 WebSocket
+
+**尚未完成：**
+- ECS / ALB / CloudWatch 的完整部署與驗證
+- 可靠事件傳遞補強（Transactional Outbox、DLQ、Replay）
+- 更完整的監控、告警、追蹤、故障恢復演練
+- 以壓測數據驗證服務邊界是否需要再調整
 
 ---
 
@@ -104,11 +178,11 @@ backend/
 
 ---
 
-## 3. 目標架構：非同步微服務 + ECS (Stage 2 🔄)
+## 3. Stage 2 下一步：ECS 部署、壓測、可靠性補強
 
-**目的**：加入 Redis 快取 + Kafka 削峰，再拆微服務部署到 AWS ECS 做壓力測試，學習 AWS 各項功能。
+**目的**：把已完成的本地微服務 MVP 送上 AWS ECS，透過 ALB、CloudWatch、k6 壓測與故障觀測，驗證目前服務邊界與事件流是否足夠支撐下一階段。 
 
-### 3.1 加入 Redis + Kafka 後的非同步架構
+### 3.1 目標 ECS 拓樸
 
 ```mermaid
 graph TD
@@ -117,61 +191,76 @@ graph TD
     subgraph "AWS ECS Cluster"
         ALB["ALB (負載均衡)"]
 
-        subgraph "API Tasks (水平擴展)"
-            API1["API Task 1"]
-            API2["API Task 2"]
-        end
+        GW["Gateway Service\n可水平擴展"]
+        OS["Order Service\n可水平擴展"]
+        ME["Matching Engine\n建議單實例或受控分片"]
+        MD["Market-Data Service\n可水平擴展 / 後續視 fanout 分片"]
 
-        subgraph "Worker Tasks"
-            WORKER["Matching Worker\n(Kafka Consumer)"]
-        end
-
-        KAFKA[("Kafka\nTopic: orders")]
-        REDIS[("Redis\n訂單簿快取")]
-        PG[("RDS PostgreSQL\n訂單/帳戶/成交")]
+        KAFKA[("MSK / Redpanda\nKafka Topics")]
+        REDIS[("ElastiCache Redis")]
+        PG[("RDS PostgreSQL")]
+        CW["CloudWatch Logs / Metrics / Alarm"]
     end
 
     CLIENT -->|HTTPS| ALB
-    ALB --> API1 & API2
+    ALB --> GW
+    GW --> OS
+    GW --> MD
 
-    API1 & API2 -->|1. Produce| KAFKA
-    API1 & API2 -->|回傳 202 Accepted| CLIENT
+    OS --> KAFKA
+    OS --> PG
+    OS --> REDIS
 
-    KAFKA -->|2. Consume| WORKER
-    WORKER -->|撮合 + 寫入| PG
-    WORKER -->|更新快取| REDIS
-    REDIS -->|Cache Hit / Pub-Sub| API1 & API2
+    KAFKA --> ME
+    ME --> KAFKA
+    ME --> REDIS
+
+    KAFKA --> MD
+    MD --> CLIENT
+
+    GW & OS & ME & MD --> CW
 ```
 
-### 3.2 Redis 的用途
+### 3.2 Redis 的當前用途
 
 | 用途 | Key Pattern | TTL |
 |------|-------------|-----|
 | 訂單簿快取 | `orderbook:{symbol}` | 500ms |
 | K 線快取 | `kline:{symbol}:{interval}` | 1m |
 | Session / Rate Limit | `ratelimit:{user_id}` | 1s |
+| Idempotency | `idempotency:{key}` | 依 API 類型設定 |
 
-### 3.3 Kafka 的用途（削峰填谷）
+### 3.3 Kafka 的當前用途與缺口
 
 ```
-同步（現在）：  HTTP → 鎖資金(DB) → 撮合 → 更新(DB) → 回傳  ← 高延遲
-非同步（目標）：HTTP → Produce 到 Kafka → 回傳 202        ← < 5ms
-                     Worker 從 Kafka 消費 → 撮合 → DB 更新
+目前：Gateway / Order Service / Matching Engine / Market-Data Service 已透過 Kafka 解耦
+下一步：補齊觀測、重試、失敗隔離、順序保證與事件可靠性
 ```
 
-**Topic 設計：**
-- `orders.new`：新訂單（API → Worker）
-- `orders.result`：成交結果（Worker → API / WS）
-- `market.kline`：K 線更新事件
+**目前已存在的主題：**
+- `exchange.orders`
+- `exchange.settlements`
+- `exchange.trades`
+- `exchange.orderbook`
+- `exchange.order_updates`
 
-### 3.4 微服務拆分
+**仍待補強的能力：**
+- DB Commit 與事件發布之間的更強一致性
+- DLQ / Retry / Replay
+- Consumer Lag 與 Topic 級別監控
+- 更清楚的事件版本管理策略
 
-| 服務 | `cmd/` 入口 | 職責 |
-|------|------------|------|
-| **API Gateway** | `cmd/gateway` | 驗證/限流/路由（規劃中） |
-| **Order Service** | `cmd/order-service` | 下單/撤單/訂單生命週期 |
-| **Matching Engine** | `cmd/matching-engine` | 純記憶體撮合，單實例 |
-| **Monolith** | `cmd/server` | 開發用整合服務（向後保留） |
+### 3.4 Stage 2 驗證重點
+
+| 驗證面向 | 要回答的問題 |
+|----------|----------------|
+| **Gateway 延遲** | Rate Limit、Idempotency、Proxy 是否成為瓶頸？ |
+| **Order API 響應** | API 是否能在 DB / Kafka 壓力下維持可接受延遲？ |
+| **Matching Engine 單點** | 撮合是否仍應維持單實例？是否需要後續分片？ |
+| **Market-Data Fanout** | WebSocket client 數量上升時是否先在 market-data-service 卡住？ |
+| **Kafka Lag** | Topic 消費延遲是否可控？ |
+| **Redis 效益** | 訂單簿與保護層快取是否真的有效降低負載？ |
+| **故障恢復** | Service restart 後是否能平穩恢復事件處理與 WebSocket 推送？ |
 
 ### 3.5 ECS 壓測目標
 
@@ -181,6 +270,8 @@ graph TD
 | P99 延遲 | < 50ms |
 | 服務可用性 | > 99.9% |
 | 壓測工具 | k6 |
+| WebSocket 連線穩定度 | 需納入獨立觀測 |
+| Kafka Consumer Lag | 需納入壓測報表 |
 
 **要學習的 AWS 服務：**
 - **ECS Fargate**：無伺服器容器，Auto Scaling
@@ -344,64 +435,164 @@ func (r *ProviderRouter) Resolve(ctx context.Context) MarketDataProvider {
 └────────────────────────────────────────────────────────────────┘
 ```
 
-### 4.6 實作優先級
+### 4.6 Stage 3 的正確切入方式
+
+Stage 3 **不應直接從「完整 CCXT 生產化」開始**，而應分成兩段：
+
+1. **先做抽象層**：Trading Mode、Provider Router、最小 PAPER mode
+2. **後做 data plane**：根據 ECS 壓測結果，再決定是否引入 TimescaleDB、NATS、完整多交易所 Collector
+
+這樣做的原因：
+
+- 可以先讓產品具備雙模式能力，而不必等待所有外部整合完成
+- 可以避免在尚未驗證的微服務邊界上，過早把 Stage 3 做深
+- 可以用壓測數據，而不是憑想像，決定 Stage 3 的資料平面設計
+
+### 4.7 抽象層實作優先級
 
 | 優先級 | 項目 | 說明 |
 |--------|------|------|
-| P0 | 前端模式切換 UI | ✅ 已完成（Phase 2） |
+| P0 | 文件同步 | 先把 current state、服務邊界、事件流寫準 |
 | P0 | `TradingModeMiddleware` | 後端 middleware 解析模式 context |
-| P1 | `ProviderRouter` | Data Source 路由器 |
-| P1 | CCXT Adapter 實作 | `MarketDataProvider` 的 CCXT 實作 |
+| P1 | `ProviderRouter` | Market Data 讀路徑的模式路由 |
+| P1 | `OrderExecutor` 抽象 | 為最小 PAPER mode 準備寫路徑抽象 |
+| P1 | 最小 `PaperMarketDataProvider` | 可先用 Stub / Fake feed 驗證產品流程 |
+| P2 | 最小 `PaperOrderExecutor` | 不急著做到真實交易所等級 |
 | P2 | Paper Account 隔離 | 模擬帳戶與本地帳戶分離 |
-| P2 | 回測引擎模式分流 | 根據模式選擇不同歷史數據來源 |
+| P3 | 真正 CCXT Adapter | 等 ECS 壓測與基線穩定後再深化 |
 
 ---
 
-## 5. 開發與部署策略：功能驅動 (Feature-Driven)
+## 5. 12 週執行 Roadmap
 
-為確保微服務轉型過程中每個組件（Redis, Kafka, 微服務拆分）皆可獨立驗證，我們採用「功能驅動開發」與「階梯式部屬」策略。
+本專案接下來的主線，不是直接跳去完成最終態，而是依序完成：
 
-### 5.1 分支進化路線圖（Stage 2）
+1. **凍結目前微服務基線**
+2. **建立 Stage 3 所需抽象層**
+3. **做出最小 PAPER mode**
+4. **回頭驗證 ECS 微服務部署與壓測**
+5. **根據壓測結果，再決定 Stage 3 data plane 投資方向**
 
-```mermaid
-gitGraph
-    commit id: "Stage 1: Monolith (Postgres)"
-    branch feat/redis-cache
-    checkout feat/redis-cache
-    commit id: "Add Redis Adapter"
-    commit id: "Cache OrderBook"
-    checkout main
-    branch feat/kafka-messaging
-    checkout feat/kafka-messaging
-    commit id: "Add Kafka Producer"
-    commit id: "Async Order Flow"
-    checkout main
-    branch feat/microservices
-    merge feat/redis-cache
-    merge feat/kafka-messaging
-    commit id: "Split cmd/order-service"
-    commit id: "Split cmd/matching-engine"
-    branch feat/aws-ecs-deploy
-    checkout feat/aws-ecs-deploy
-    commit id: "IaC: Terraform + ecspresso"
-```
+### 5.1 Milestone 1（第 1-2 週）：同步 Current State 文件
 
-### 5.2 階段性測試目標
+**目標：** 讓文件與 `feat/microservices` 現況一致，凍結後續設計的基線。
 
-| 階段分支 | 核心組件 | 獨立測試行為 |
-| :--- | :--- | :--- |
-| `feat/redis-cache` | Redis | 驗證 `GET /orderbook` 延遲從 20ms 降至 2ms；驗證 Redis 斷線時能 fallback 至 DB。 |
-| `feat/kafka-messaging` | Kafka | 驗證 `POST /orders` 異步處理；即使 DB 延遲或掛掉，API 仍能穩定回傳 `202 Accepted`。 |
-| `feat/microservices` | gRPC/Internal API | 驗證 `Order Service` 與 `Matching Engine` 進程間通訊正常；維持原本單體架構的 API 契約不變。 |
-| `feat/aws-ecs-deploy` | ECS Fargate | 雲端壓力測試：模擬 1000+ TPS 觀察各服務負載平衡與 Auto-scaling 行為。 |
+**範圍：**
+- 更新本文件中的 current state、服務邊界、Topic、技術債
+- 補齊 Gateway / Order Service / Matching Engine / Market-Data Service 的責任分工
+- 明確標註 local MVP 已完成與 production hardening 未完成項
+
+**完成標準：**
+- 新成員只看文件，就知道目前不是單體而是 4 服務微服務 MVP
+- 能直接回答「誰負責 WebSocket」「誰做 Rate Limit」「誰 consume 哪些 Topic」
+
+### 5.2 Milestone 2（第 3-4 週）：導入 Trading Mode Plumbing
+
+**目標：** 讓系統具備 `INTERNAL` / `PAPER` 的模式概念，但暫不接外部交易所。
+
+**範圍：**
+- 定義 Trading Mode 型別與常數
+- 實作 `TradingModeMiddleware`
+- HTTP 使用 `X-Trading-Mode`
+- WebSocket 定義 Query Param 或 Header 映射
+- 將 mode 注入 request context
+- 補 middleware / handler 測試
+
+**完成標準：**
+- 所有 API request 都能判斷目前 mode
+- 未帶 mode 時預設走 `INTERNAL`
+- 不影響既有 INTERNAL flow
+
+### 5.3 Milestone 3（第 5-6 週）：讀路徑 Mode-Aware 化
+
+**目標：** 先把低風險的讀路徑抽象成 provider-based flow。
+
+**優先順序：**
+1. `GET /orderbook`
+2. `GET /trades`
+3. `GET /klines`
+4. 其他行情查詢
+
+**範圍：**
+- 定義 `MarketDataProvider`
+- 實作 `InternalMarketDataProvider`
+- 實作 `ProviderRouter`
+- API Handler 依 mode 選資料來源
+- PAPER mode 先接 Stub / Fake Provider
+
+**完成標準：**
+- 同一組讀 API 能依 mode 回不同資料
+- INTERNAL 行為與目前一致
+- PAPER 先用假資料也可接受
+
+### 5.4 Milestone 4（第 7-8 週）：最小可跑 PAPER Mode
+
+**目標：** 做出可 demo 的 PAPER mode，而不是先完成真實多交易所整合。
+
+**範圍：**
+- 定義 `OrderExecutor`
+- 實作最小 `PaperOrderExecutor`
+- 決定 PAPER order 的最小 persistence 策略
+- 前端加入 mode 切換 UI 與清楚標示
+- 讓 PAPER mode 的 API / UI 與 INTERNAL 明顯區分
+
+**完成標準：**
+- 使用者切到 PAPER mode 時，能看到不同資料來源與流程
+- PAPER mode 至少支援行情讀取與簡化下單展示
+
+### 5.5 Milestone 5（第 9-10 週）：ECS 部署與觀測基線
+
+**目標：** 將目前微服務送上 ECS，建立可重複部署與觀測能力。
+
+**範圍：**
+- 凍結一個壓測版本
+- 部署 Gateway / Order Service / Matching Engine / Market-Data Service
+- 接上 ALB / Health Check / CloudWatch Logs / Metrics
+- 驗證 Redis / Kafka / PostgreSQL 雲端連線與啟動順序
+
+**完成標準：**
+- 4 個服務均可在 ECS 正常啟動
+- ALB、API、WebSocket 均可完成 smoke test
+- 基本 log / metrics / alarm 具備可觀測性
+
+### 5.6 Milestone 6（第 11-12 週）：k6 壓測與架構決策
+
+**目標：** 用數據決定下一步要補的是真正的可靠性、fanout、storage，還是 Stage 3 data plane。
+
+**壓測輪次：**
+1. Smoke Test
+2. 中壓 TPS Test
+3. Soak Test
+
+**重點指標：**
+- Gateway Latency
+- Order API Latency
+- Kafka Consumer Lag
+- Matching Engine CPU / 單點壓力
+- Market-Data Service Fanout 負載
+- Redis Hit Ratio
+- Service Recovery Time
+
+**完成標準：**
+- 產出壓測報告與 bottleneck 分析
+- 明確知道下一步該先做 Outbox、Fanout 優化、查詢優化，還是導入新技術
+
+### 5.7 Roadmap 的決策原則
+
+- **先抽象、後重整外部整合。**
+- **先做本地可驗證的 PAPER scaffold，再做真正的 CCXT data plane。**
+- **先上 ECS 驗證微服務邊界，再決定是否引入 TimescaleDB / NATS。**
+- **任何新技術都應對應壓測後的真實瓶頸，而不是先行導入。**
 
 ---
 
 ## 6. 最終目標：CCXT 多交易所平台 (Stage 3 📋)
 
-**目的**：壓測完成、學完 AWS 後，**保留撮合引擎作為 INTERNAL 模式**，同時接入 CCXT 真實行情作為 PAPER 模式，實現雙軌並行的多交易所策略回測平台。
+**目的**：在完成 ECS 壓測與架構決策後，**保留撮合引擎作為 INTERNAL 模式**，再逐步接入 CCXT 真實行情作為 PAPER 模式，最終實現雙軌並行的多交易所策略回測平台。
 
 > 💡 Stage 3 **不是取代** Stage 1，而是在既有撮合引擎旁邊新增 CCXT 軌道。前端透過模式切換即可在兩者間無縫切換。詳見 [第 4 章：雙模態交易環境](#4-雙模態交易環境dual-mode-trading-environment)。
+
+> 💡 Stage 3 的實作順序也不是「先做完整交易所整合」，而是「先做模式抽象與最小 PAPER mode，待 ECS 壓測後再決定真正的資料平面」。
 
 ### 6.1 全系統架構圖（最終態 — 雙軌並行）
 
@@ -495,3 +686,8 @@ type ExchangeProvider interface {
 ---
 
 ## 7. 文件索引
+
+- [docs/guides/MICROSERVICES_TUTORIAL.md](../guides/MICROSERVICES_TUTORIAL.md): 本地微服務啟動、資料流與 debug 指南
+- [docs/guides/QUICKSTART.md](../guides/QUICKSTART.md): 本地開發與快速啟動
+- [docs/testing/LOAD_TESTING.md](../testing/LOAD_TESTING.md): 壓測策略與資料記錄
+- [docs/infrastructure/AWS_DEPLOYMENT_GUIDE.md](../infrastructure/AWS_DEPLOYMENT_GUIDE.md): AWS 相關部署與環境說明
