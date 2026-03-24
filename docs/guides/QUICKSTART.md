@@ -133,7 +133,7 @@ lsof -i :8080
 
 ## 下一步
 
-- 查看 [架構說明](ARCHITECTURE.md)
-- 查看 [微服務拆分教學](/Volumes/KINGSTON/Programming/cyptocurrency_exchange/backend/docs/guides/MICROSERVICES_TUTORIAL.md)
-- 查看 [ECS 部署與壓測手冊](ECS_LOADTEST_GUIDE.md)
-- 查看 [學習路線圖](../../project_target.md)
+- 查看 [架構說明](../architecture/ARCHITECTURE.md)
+- 查看 [微服務架構說明](MICROSERVICES_TUTORIAL.md)
+- 查看 [測試執行 Runbook](../testing/TEST_EXECUTION_RUNBOOK.md)
+- 查看 [開發藍圖](../planning/ROADMAP.md)
