@@ -13,6 +13,7 @@ import (
 	"github.com/RayLiu1999/exchange/internal/core"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/kafka"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger" // 使用您自訂的 Logger
+	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/redis"
 	"github.com/RayLiu1999/exchange/internal/middleware"
 	"github.com/RayLiu1999/exchange/internal/repository"
@@ -97,7 +98,7 @@ func main() {
 	}
 
 	// 3. WebSocket Handler (先建立，作為事件監聽者)
-	wsHandler := api.NewWebSocketHandler()
+	wsHandler := api.NewWebSocketHandler("server")
 	go wsHandler.Run()
 	// wsHandler.StartBroadcastingDummyData() // 已移除，改用 Real Data
 
@@ -138,6 +139,8 @@ func main() {
 
 	// 6. 啟動伺服器
 	r := gin.Default()
+	r.Use(metrics.Middleware("server"))
+	r.GET("/metrics", gin.WrapH(metrics.Handler()))
 
 	// CORS：只允許白名單 Origin（防 CSRF），加入 Idempotency-Key Header 許可
 	corsConfig := cors.Config{

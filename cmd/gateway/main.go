@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
 	infraredis "github.com/RayLiu1999/exchange/internal/infrastructure/redis"
 	"github.com/RayLiu1999/exchange/internal/middleware"
 	"github.com/gin-gonic/gin"
@@ -73,6 +74,8 @@ func main() {
 
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(metrics.Middleware("gateway"))
+	r.GET("/metrics", gin.WrapH(metrics.Handler()))
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"status":              "ok",

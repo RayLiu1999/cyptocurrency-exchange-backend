@@ -12,6 +12,7 @@ import (
 	"github.com/RayLiu1999/exchange/internal/core"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/kafka"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/redis"
 	"github.com/RayLiu1999/exchange/internal/repository"
 	"github.com/gin-gonic/gin"
@@ -128,6 +129,8 @@ func main() {
 
 	// 8. Health check HTTP endpoint (ECS ALB / Docker probe)
 	r := gin.New()
+	r.Use(metrics.Middleware("matching-engine"))
+	r.GET("/metrics", gin.WrapH(metrics.Handler()))
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "matching-engine"})
 	})

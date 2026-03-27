@@ -13,6 +13,7 @@ import (
 	"github.com/RayLiu1999/exchange/internal/core"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/kafka"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -26,7 +27,7 @@ func main() {
 		kafkaCfg.Brokers = strings.Split(brokers, ",")
 	}
 
-	wsHandler := api.NewWebSocketHandler()
+	wsHandler := api.NewWebSocketHandler("market-data-service")
 	go wsHandler.Run()
 
 	svc := core.NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", wsHandler, nil, nil)
@@ -56,6 +57,7 @@ func main() {
 	orderUpdateConsumer.Start(consumerCtx, svc.HandleOrderUpdatedEvent)
 
 	r := gin.Default()
+	r.Use(metrics.Middleware("market-data-service"))
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3000", "http://localhost:8084"},
 		AllowMethods:     []string{"GET", "OPTIONS"},
@@ -63,6 +65,7 @@ func main() {
 		AllowCredentials: false,
 		MaxAge:           12 * time.Hour,
 	}))
+	r.GET("/metrics", gin.WrapH(metrics.Handler()))
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "market-data-service"})
 	})

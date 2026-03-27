@@ -13,6 +13,7 @@ import (
 	"github.com/RayLiu1999/exchange/internal/core"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/kafka"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/redis"
 	"github.com/RayLiu1999/exchange/internal/repository"
 	"github.com/RayLiu1999/exchange/internal/simulator"
@@ -136,6 +137,8 @@ func main() {
 
 	// 7. HTTP routes
 	r := gin.Default()
+	r.Use(metrics.Middleware("order-service"))
+	r.GET("/metrics", gin.WrapH(metrics.Handler()))
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3000"},
 		AllowMethods:     []string{"GET", "POST", "DELETE", "OPTIONS"},
