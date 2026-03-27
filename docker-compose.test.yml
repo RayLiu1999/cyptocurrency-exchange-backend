@@ -16,17 +16,15 @@ services:
       - .env
     environment:
       GIN_MODE: release
-      GOMAXPROCS: "1"
-      GOMEMLIMIT: "450MiB"
-    # 針對壓測設定資源限制
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 512M
+      # 已移除 GOMAXPROCS 與資源限制，以測出架構真實極限
     depends_on:
       - order-service
       - market-data-service
+    networks:
+      - postgres_default
+      - redis_default
+      - redpanda_default
+      - prometheus-grafana_default
 
   matching-engine:
     build:
@@ -35,21 +33,18 @@ services:
       args:
         SERVICE_NAME: matching-engine
     container_name: exchange-matching-engine-prod
-    ports:
-      - "${MATCHING_ENGINE_PORT:-8101}:${MATCHING_ENGINE_PORT:-8101}"
+    # 生產環境不對外暴露 port，只允許 Docker 內部網路互相存取
+    # 若需 Prometheus 抓取指標，請使用 Docker 內部 DNS (service name) 而非 host ports
     env_file:
       - .env
     environment:
       GIN_MODE: release
-      GOMAXPROCS: "2"
-      GOMEMLIMIT: "900MiB"
-    # 針對壓測設定資源限制 (撮合引擎通常需要較多 CPU)
-    deploy:
-      resources:
-        limits:
-          cpus: "2.0"
-          memory: 1024M
-
+      # 已移除 GOMAXPROCS 與資源限制，以測出架構真實極限
+    networks:
+      - postgres_default
+      - redis_default
+      - redpanda_default
+      - prometheus-grafana_default
   order-service:
     build:
       context: .
@@ -57,22 +52,19 @@ services:
       args:
         SERVICE_NAME: order-service
     container_name: exchange-order-service-prod
-    ports:
-      - "${ORDER_SERVICE_PORT:-8103}:${ORDER_SERVICE_PORT:-8103}"
+    # 生產環境不對外暴露 port，流量只能透過 gateway 進入
     env_file:
       - .env
     environment:
       GIN_MODE: release
-      GOMAXPROCS: "1"
-      GOMEMLIMIT: "450MiB"
-    # 針對壓測設定資源限制
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 512M
+      # 已移除 GOMAXPROCS 與資源限制，以測出架構真實極限
     depends_on:
       - matching-engine
+    networks:
+      - postgres_default
+      - redis_default
+      - redpanda_default
+      - prometheus-grafana_default
 
   market-data-service:
     build:
@@ -81,20 +73,27 @@ services:
       args:
         SERVICE_NAME: market-data-service
     container_name: exchange-market-data-service-prod
-    ports:
-      - "${MARKET_DATA_PORT:-8102}:${MARKET_DATA_PORT:-8102}"
+    # 生產環境不對外暴露 port，WebSocket 連線統一走 gateway /ws 路由
     env_file:
       - .env
     environment:
       GIN_MODE: release
-      GOMAXPROCS: "1"
-      GOMEMLIMIT: "450MiB"
-    # 針對壓測設定資源限制
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 512M
+      # 已移除 GOMAXPROCS 與資源限制，以測出架構真實極限
     depends_on:
       - matching-engine
       - order-service
+    networks:
+      - postgres_default
+      - redis_default
+      - redpanda_default
+      - prometheus-grafana_default
+
+networks:
+  postgres_default:
+    external: true
+  redis_default:
+    external: true
+  redpanda_default:
+    external: true
+  prometheus-grafana_default:
+    external: true
