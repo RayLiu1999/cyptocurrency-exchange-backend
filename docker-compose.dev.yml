@@ -37,8 +37,10 @@ services:
       dockerfile: Dockerfile.dev
     container_name: exchange-matching-engine
     command: air -c .air.matching-engine.toml
+    # [僅開發環境] 對外映射 port 方便 Postman / Prometheus 直接存取底層服務
+    # 生產環境 (docker-compose.test.yml) 已移除此映射，強制所有流量走 gateway
     ports:
-      - "${MATCHING_ENGINE_PORT:-8101}:${MATCHING_ENGINE_PORT:-8101}" # health check
+      - "${MATCHING_ENGINE_PORT:-8101}:${MATCHING_ENGINE_PORT:-8101}" # health check & metrics
     volumes:
       - .:/app
     env_file:
@@ -60,6 +62,8 @@ services:
       dockerfile: Dockerfile.dev
     container_name: exchange-order-service
     command: air -c .air.order-service.toml
+    # [僅開發環境] 對外映射 port 方便 Postman / Prometheus 直接存取底層服務
+    # 生產環境 (docker-compose.test.yml) 已移除此映射，強制所有流量走 gateway
     ports:
       - "${ORDER_SERVICE_PORT:-8103}:${ORDER_SERVICE_PORT:-8103}" # HTTP API
     volumes:
@@ -86,8 +90,10 @@ services:
       dockerfile: Dockerfile.dev
     container_name: exchange-market-data-service
     command: air -c .air.market-data-service.toml
+    # [僅開發環境] 對外映射 port 方便 Postman / Prometheus 直接存取底層服務
+    # 生產環境 (docker-compose.test.yml) 已移除此映射，強制所有流量走 gateway
     ports:
-      - "${MARKET_DATA_PORT:-8102}:${MARKET_DATA_PORT:-8102}"
+      - "${MARKET_DATA_PORT:-8102}:${MARKET_DATA_PORT:-8102}" # WebSocket & metrics
     volumes:
       - .:/app
     env_file:

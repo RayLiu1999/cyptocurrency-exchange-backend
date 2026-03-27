@@ -1,4 +1,4 @@
-.PHONY: build build-server build-gateway build-order-service build-matching-engine build-market-data-service test lint fmt tidy clean dev-up dev-down dev-logs prod-up prod-down prod-logs db-migrate db-seed db-fresh help
+.PHONY: build build-server build-gateway build-order-service build-matching-engine build-market-data-service test lint fmt tidy clean dev-up dev-down dev-logs test-up test-down test-logs db-migrate db-seed db-fresh help
 
 # 變數定義
 BUILD_DIR=.
@@ -98,26 +98,26 @@ dev-down: ## 停止開發環境
 	@echo "🛑 停止開發環境..."
 	docker compose -f docker-compose.dev.yml down
 
-dev-build: ## 編譯 Docker 鏡像
-	@echo "🐳 編譯 Docker 鏡像..."
-	docker compose -f docker-compose.dev.yml up -d --build
-
 dev-logs: ## 查看開發環境日誌
 	docker compose -f docker-compose.dev.yml logs -f ${SERVICE_NAME:-gateway}
 
-# --- Docker 生產環境 ---
+# --- Docker 測試環境 ---
 
-prod-up: ## 啟動生產環境容器
-	@echo "🐳 啟動生產環境..."
-	docker compose up -d
+test-up: ## 啟動測試環境容器
+	@echo "🐳 啟動測試環境..."
+	docker compose -f docker-compose.test.yml up -d
 
-prod-down: ## 停止生產環境容器
-	@echo "🛑 停止生產環境..."
-	docker compose down
+test-down: ## 停止測試環境容器
+	@echo "🛑 停止測試環境..."
+	docker compose -f docker-compose.test.yml down
 
-prod-logs: ## 查看生產環境日誌
-	docker compose logs -f ${SERVICE_NAME:-gateway}
+test-build: ## 編譯 Docker 鏡像 (測試環境)
+	@echo "🐳 編譯 Docker 鏡像 (測試環境)..."
+	docker compose -f docker-compose.test.yml up -d --build
+	docker image prune -f
 
+test-logs: ## 查看測試環境日誌
+	docker compose -f docker-compose.test.yml logs -f ${SERVICE_NAME:-gateway}
 # --- 資料庫輔助指令 (需確保 Postgres 容器已啟動) ---
 
 db-migrate: ## 執行資料庫 Migration
@@ -141,6 +141,10 @@ db-fresh: ## 清空並重建資料庫表結構
 lint: ## 執行程式碼檢查
 	@echo "🔍 執行程式碼檢查..."
 	golangci-lint run ./...
+
+vuln: ## 檢查漏洞
+	@echo "🔍 檢查漏洞..."
+	govulncheck ./...
 
 fmt: ## 格式化程式碼
 	@echo "✨ 格式化程式碼..."
