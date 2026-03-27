@@ -116,6 +116,49 @@ var (
 		},
 		[]string{"service", "reason"},
 	)
+
+	// Outbox Pattern 指標
+	outboxPendingCount = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "exchange",
+			Name:      "outbox_pending_count",
+			Help:      "目前 outbox_messages 表中尚未發送到 Kafka 的訊息積壓數量（Pending 狀態）。若此值持續上升代表 Outbox Worker 或 Kafka 異常。",
+		},
+	)
+	outboxPublishTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "exchange",
+			Name:      "outbox_publish_total",
+			Help:      "Outbox Worker 發送訊息到 Kafka 的總次數。",
+		},
+		[]string{"result"}, // result: success | error
+	)
+	outboxPublishLatency = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "exchange",
+			Name:      "outbox_publish_latency_seconds",
+			Help:      "Outbox Worker 發送單筆訊息到 Kafka 的延遲分佈。",
+			Buckets:   []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5},
+		},
+	)
+
+	// Leader Election 指標
+	isPartitionLeader = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "exchange",
+			Name:      "is_partition_leader",
+			Help:      "目前此實例是否為 Leader：1 = Leader，0 = Standby。若所有實例的總和 > 1 代表腦裂；總和 = 0 代表無 Leader。",
+		},
+		[]string{"partition"},
+	)
+	leaderLeaseRenewalsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "exchange",
+			Name:      "leader_lease_renewals_total",
+			Help:      "Leader 租約延長操作的總次數。",
+		},
+		[]string{"result"}, // result: success | error
+	)
 )
 
 // Ensure 初始化 Prometheus 指標，並避免重複註冊。
@@ -133,6 +176,11 @@ func Ensure() {
 		prometheus.MustRegister(websocketBroadcastTotal)
 		prometheus.MustRegister(websocketBroadcastDuration)
 		prometheus.MustRegister(websocketDroppedClientsTotal)
+		prometheus.MustRegister(outboxPendingCount)
+		prometheus.MustRegister(outboxPublishTotal)
+		prometheus.MustRegister(outboxPublishLatency)
+		prometheus.MustRegister(isPartitionLeader)
+		prometheus.MustRegister(leaderLeaseRenewalsTotal)
 	})
 }
 
@@ -232,6 +280,23 @@ func ObserveWebSocketBroadcastDuration(service, messageType string, duration tim
 func RecordWebSocketDroppedClient(service, reason string) {
 	Ensure()
 	websocketDroppedClientsTotal.WithLabelValues(service, reason).Inc()
+}
+
+// --- Outbox Pattern 指標 ---
+
+// SetOutboxPendingCount 設定目前積壓中（Pending）的 Outbox 訊息數量。
+// 應在 Outbox Worker 每次掃描前呼叫，確保 Grafana 能及時觸發 Alert。
+func SetOutboxPendingCount(count float64) {
+	Ensure()
+	outboxPendingCount.Set(count)
+}
+
+// ObserveOutboxPublish 記錄 Outbox Worker 發送一筆訊息到 Kafka 的結果與延遲。
+// result 應為 "success" 或 "error"。
+func ObserveOutboxPublish(result string, duration time.Duration) {
+	Ensure()
+	outboxPublishTotal.WithLabelValues(result).Inc()
+	outboxPublishLatency.Observe(duration.Seconds())
 }
 
 // RegisterDBStats 為特定名稱的 DB Pool 註冊定期/動態擷取的狀態指標。
@@ -356,4 +421,26 @@ func RegisterRedisStats(poolName string, client *redis.Client) {
 		},
 		func() float64 { return float64(client.PoolStats().Timeouts) },
 	))
+}
+
+// --- Leader Election 指標 ---
+
+// SetPartitionLeader 設定目前 Partition 的 Leader 狀態。
+// isLeader=true 設為 1，否則設為 0。
+// 建議在 LeaderElector 的 onBecomeLeader 與 onLoseLeadership 回呼中呼叫。
+func SetPartitionLeader(partition string, isLeader bool) {
+	Ensure()
+	val := float64(0)
+	if isLeader {
+		val = 1
+	}
+	isPartitionLeader.WithLabelValues(partition).Set(val)
+}
+
+// ObserveLeaderRenewal 記錄一次租約延長的結果。
+// result 應為 "success" 或 "error"。
+// 若 error 次數突然飆增，代表 DB 連線不穩或即將發生選主切換。
+func ObserveLeaderRenewal(result string) {
+	Ensure()
+	leaderLeaseRenewalsTotal.WithLabelValues(result).Inc()
 }

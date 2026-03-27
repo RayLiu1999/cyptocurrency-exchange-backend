@@ -10,6 +10,7 @@ import (
 
 	"github.com/RayLiu1999/exchange/internal/core/matching"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/outbox"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
@@ -24,8 +25,9 @@ type ExchangeServiceImpl struct {
 	tradeListener TradeEventListener
 	txManager     DBTransaction
 	engineManager *matching.EngineManager
-	cacheRepo     CacheRepository // Redis 快取 (可選)
-	eventBus      EventPublisher  // Kafka 事件發布 (可選，無 Kafka 時為 nil)
+	cacheRepo     CacheRepository  // Redis 快取 (可選)
+	eventBus      EventPublisher   // Kafka 事件發布 (可選，無 Kafka 時為 nil)
+	outboxRepo    *outbox.Repository // Outbox Pattern 的資料庫操作 (可選)
 }
 
 // AccountUpdate 資金變更紀錄
@@ -100,8 +102,9 @@ func NewExchangeService(
 	txManager DBTransaction,
 	defaultSymbol string,
 	tradeListener TradeEventListener,
-	cacheRepo CacheRepository, // 注入 CacheRepository
-	eventBus EventPublisher, // 注入 EventPublisher (Kafka，可為 nil)
+	cacheRepo CacheRepository,     // 注入 CacheRepository
+	eventBus EventPublisher,       // 注入 EventPublisher (Kafka，可為 nil)
+	outboxRepo *outbox.Repository, // 注入 OutboxRepository（可為 nil，僅 Kafka 模式需要）
 ) *ExchangeServiceImpl {
 	manager := matching.NewEngineManager()
 	// 預先建立預設交易對的 Engine
@@ -116,6 +119,7 @@ func NewExchangeService(
 		engineManager: manager,
 		cacheRepo:     cacheRepo,
 		eventBus:      eventBus,
+		outboxRepo:    outboxRepo,
 	}
 }
 

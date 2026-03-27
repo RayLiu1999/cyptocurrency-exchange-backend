@@ -11,6 +11,7 @@ import (
 	"github.com/RayLiu1999/exchange/internal/core/matching"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/outbox"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
@@ -68,14 +69,48 @@ func (s *ExchangeServiceImpl) PlaceOrder(ctx context.Context, order *Order) (err
 		if err := s.orderRepo.CreateOrder(ctx, order); err != nil {
 			return fmt.Errorf("建立訂單失敗: %w", err)
 		}
+
+		// === Outbox Pattern: 在同一個 TX 內寫入 Outbox 訊息 ===
+		// 該設計確保「資金鎖定 + 訂單建立」與「事件將被發送到 Kafka」的一致性
+		// 即使主流程的 Kafka Produce 失敗，訂單永遠不會遺失——Outbox Worker 會定期重試
+		if s.outboxRepo != nil && s.eventBus != nil {
+			event := &OrderPlacedEvent{
+				EventType:      EventOrderPlaced,
+				Symbol:         order.Symbol,
+				OrderID:        order.ID,
+				UserID:         order.UserID,
+				Side:           order.Side,
+				Type:           order.Type,
+				Price:          order.Price,
+				Quantity:       order.Quantity,
+				CreatedAt:      order.CreatedAt,
+				AmountLocked:   amountToLock,
+				LockedCurrency: currencyToLock,
+			}
+			payload, marshalErr := outbox.MarshalPayload(event)
+			if marshalErr != nil {
+				return fmt.Errorf("序列化 OrderPlacedEvent 失敗: %w", marshalErr)
+			}
+			if insertErr := s.outboxRepo.Insert(ctx, &outbox.Message{
+				AggregateID:   order.ID.String(),
+				AggregateType: "order_placed",
+				Topic:         TopicOrders,
+				PartitionKey:  order.Symbol,
+				Payload:       payload,
+			}); insertErr != nil {
+				return fmt.Errorf("寫入 Outbox 訊息失敗: %w", insertErr)
+			}
+		}
+
 		return nil
 	})
 	if err != nil {
 		return err
 	}
 
-	// === TX1 成功後，優先嘗試 Kafka 非同步撮合；無 Kafka 時退回同步模式（向後相容）===
-	if s.eventBus != nil {
+	// === TX1 完成後: Outbox Worker 會負責實際的 Kafka Produce
+	// 若未設定 Outbox，則退回被動 Produce 模式（向後相容）
+	if s.eventBus != nil && s.outboxRepo == nil {
 		event := &OrderPlacedEvent{
 			EventType:      EventOrderPlaced,
 			Symbol:         order.Symbol,
@@ -90,9 +125,9 @@ func (s *ExchangeServiceImpl) PlaceOrder(ctx context.Context, order *Order) (err
 			LockedCurrency: currencyToLock,
 		}
 		if err := s.eventBus.Publish(ctx, TopicOrders, order.Symbol, event); err != nil {
-			// Kafka 發布失敗：記錄錯誤但不 rollback TX1（資金已鎖定，訂單已在 DB）
-			// 此為已知的雙寫風險，Transactional Outbox 可在 Phase 6 補強
-			log.Printf("發布 OrderPlacedEvent 失敗: %v", err)
+			// Kafka 發布失敗：記錄錯誤但不 rollback TX1
+			// 此為已知的雙寫風險，建議啟用 outboxRepo 來消除此風險
+			log.Printf("發布 OrderPlacedEvent 失敗 (建議開啟 Outbox): %v", err)
 		}
 		return nil
 	}

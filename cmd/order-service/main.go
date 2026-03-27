@@ -105,6 +105,7 @@ func main() {
 		nil,
 		cacheRepo,
 		eventBus,
+		nil, // outboxRepo: 將在此單獨啟動 Outbox Worker
 	)
 
 	// Only restore engine snapshot in fallback (no-Kafka) mode.

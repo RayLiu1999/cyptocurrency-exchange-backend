@@ -86,7 +86,7 @@ func TestEstimateMarketBuyFunds_UsesRedisSnapshotInMicroserviceMode(t *testing.T
 			},
 		},
 	}
-	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", nil, cacheRepo, &stubEventPublisher{})
+	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", nil, cacheRepo, &stubEventPublisher{}, nil)
 
 	funds, err := svc.estimateMarketBuyFunds("BTC-USD", decimal.NewFromFloat(1.5))
 
@@ -98,7 +98,7 @@ func TestEstimateMarketBuyFunds_UsesRedisSnapshotInMicroserviceMode(t *testing.T
 
 func TestEstimateMarketBuyFunds_FallsBackToEngineWhenRedisMisses(t *testing.T) {
 	cacheRepo := &stubCacheRepository{err: errors.New("redis miss")}
-	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", nil, cacheRepo, &stubEventPublisher{})
+	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", nil, cacheRepo, &stubEventPublisher{}, nil)
 	engine := svc.engineManager.GetEngine("BTC-USD")
 	engine.Process(matching.NewOrder(uuid.New(), uuid.New(), matching.SideSell, decimal.NewFromInt(100), decimal.NewFromInt(2)))
 
@@ -111,7 +111,7 @@ func TestEstimateMarketBuyFunds_FallsBackToEngineWhenRedisMisses(t *testing.T) {
 
 func TestHandleOrderBookEvent_RelaysSnapshotToTradeListener(t *testing.T) {
 	listener := &stubTradeListener{}
-	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", listener, nil, nil)
+	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", listener, nil, nil, nil)
 
 	event := OrderBookUpdatedEvent{
 		EventType: EventOrderBookUpdated,
@@ -136,7 +136,7 @@ func TestHandleOrderBookEvent_RelaysSnapshotToTradeListener(t *testing.T) {
 
 func TestHandleTradeEvent_RelaysTradeToTradeListener(t *testing.T) {
 	listener := &stubTradeListener{}
-	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", listener, nil, nil)
+	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", listener, nil, nil, nil)
 
 	event := TradeExecutedEvent{
 		EventType:    EventTradeExecuted,
@@ -160,7 +160,7 @@ func TestHandleTradeEvent_RelaysTradeToTradeListener(t *testing.T) {
 
 func TestHandleOrderUpdatedEvent_RelaysOrderToTradeListener(t *testing.T) {
 	listener := &stubTradeListener{}
-	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", listener, nil, nil)
+	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", listener, nil, nil, nil)
 
 	order := &Order{
 		ID:             uuid.New(),
@@ -192,7 +192,7 @@ func TestHandleOrderUpdatedEvent_RelaysOrderToTradeListener(t *testing.T) {
 func TestOnOrderBookUpdate_PublishesKafkaEventWhenNoTradeListener(t *testing.T) {
 	publisher := &stubEventPublisher{}
 	cacheRepo := &stubCacheRepository{setCalls: make(chan struct{}, 1)}
-	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", nil, cacheRepo, publisher)
+	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", nil, cacheRepo, publisher, nil)
 	snapshot := &matching.OrderBookSnapshot{
 		Symbol: "BTC-USD",
 		Asks: []matching.OrderBookLevel{

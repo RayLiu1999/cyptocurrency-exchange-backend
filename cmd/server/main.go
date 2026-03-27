@@ -103,7 +103,7 @@ func main() {
 	// wsHandler.StartBroadcastingDummyData() // 已移除，改用 Real Data
 
 	// 4. Service (內建撮合引擎，注入 repo 作為所有的 Repository 實現)
-	svc := core.NewExchangeService(repo, repo, repo, repo, repo, "BTC-USD", wsHandler, cacheRepo, eventBus)
+	svc := core.NewExchangeService(repo, repo, repo, repo, repo, "BTC-USD", wsHandler, cacheRepo, eventBus, nil)
 
 	// 啟動時從資料庫還原未完成的訂單，重建掛單簿
 	// ⚠️ 必須在 Kafka Consumers 啟動前完成，防止 Cold Start 空掛單簿問題

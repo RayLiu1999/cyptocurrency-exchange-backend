@@ -30,7 +30,7 @@ func main() {
 	wsHandler := api.NewWebSocketHandler("market-data-service")
 	go wsHandler.Run()
 
-	svc := core.NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", wsHandler, nil, nil)
+	svc := core.NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", wsHandler, nil, nil, nil)
 
 	consumerCtx, cancelConsumers := context.WithCancel(context.Background())
 	var orderBookConsumer *kafka.Consumer

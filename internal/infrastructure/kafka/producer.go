@@ -75,6 +75,30 @@ func (p *Producer) Publish(ctx context.Context, topic, key string, payload inter
 	return nil
 }
 
+// PublishRaw 直接將已序列化的 []byte 發布至指定 topic
+// 實作 outbox.Publisher 介面，供 Outbox Worker 使用
+func (p *Producer) PublishRaw(ctx context.Context, topic, key string, value []byte) error {
+	pubCtx, cancel := context.WithTimeout(ctx, p.publishTimeout)
+	defer cancel()
+
+	record := &kgo.Record{
+		Topic: topic,
+		Key:   []byte(key),
+		Value: value,
+	}
+
+	if err := p.client.ProduceSync(pubCtx, record).FirstErr(); err != nil {
+		logger.Error("Outbox: 發布原始事件到 Kafka 失敗",
+			zap.String("topic", topic),
+			zap.String("key", key),
+			zap.Error(err),
+		)
+		return fmt.Errorf("Outbox PublishRaw 失敗: %w", err)
+	}
+
+	return nil
+}
+
 // CreateTopics 建立指定 Kafka 主題（若已存在則忽略）
 // 使用 kmsg 直接透過現有 kgo.Client 送出 CreateTopicsRequest，無需額外 Admin Client。
 // 適合服務啟動時確保所有 topic 存在，避免 UNKNOWN_TOPIC_OR_PARTITION 錯誤。

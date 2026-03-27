@@ -17,7 +17,7 @@ import (
 
 func TestCalculateTradeSettlement_BuyerReceivesBTC(t *testing.T) {
 	// Arrange
-	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", nil, nil, nil)
+	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", nil, nil, nil, nil)
 
 	takerOrder := &Order{
 		ID:     uuid.New(),
@@ -72,7 +72,7 @@ func TestCalculateTradeSettlement_BuyerReceivesBTC(t *testing.T) {
 
 func TestCalculateTradeSettlement_SellerReceivesUSD(t *testing.T) {
 	// Arrange
-	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", nil, nil, nil)
+	svc := NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", nil, nil, nil, nil)
 
 	takerOrder := &Order{
 		ID:     uuid.New(),
@@ -154,7 +154,7 @@ func TestRestoreEngineSnapshot_Success_RebuildsActiveOrders(t *testing.T) {
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
 	tradeRepo := NewMockTradeRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil, nil, nil)
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil, nil, nil, nil)
 
 	userID := uuid.New()
 	activeOrders := []*Order{
@@ -201,7 +201,7 @@ func TestRestoreEngineSnapshot_RepositoryError_ReturnsError(t *testing.T) {
 	orderRepo := NewMockOrderRepository()
 	accountRepo := NewMockAccountRepository()
 	tradeRepo := NewMockTradeRepository()
-	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil, nil, nil)
+	svc := NewExchangeService(orderRepo, accountRepo, tradeRepo, &MockUserRepository{}, &MockDBTransaction{}, "BTC-USD", nil, nil, nil, nil)
 
 	orderRepo.On("GetActiveOrders", ctx).Return(nil, fmt.Errorf("資料庫連線中斷"))
 

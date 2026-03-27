@@ -82,6 +82,7 @@ func main() {
 		nil,
 		cacheRepo,
 		producer,
+		nil, // outboxRepo: matching-engine 不會直接接收訂單，無需 Outbox
 	)
 
 	// 6. Restore engine snapshot (must complete before consumer starts)
