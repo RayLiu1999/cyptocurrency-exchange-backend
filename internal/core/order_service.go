@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/RayLiu1999/exchange/internal/core/matching"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
@@ -22,7 +22,16 @@ import (
 //  2. 送入記憶體撮合引擎，取得成交列表（Trades）
 //  3. 第二事務（Atomic Settlement）：Taker 與所有 Maker 的訂單統一排序鎖定、
 //     結算資金、寫入成交記錄，避免 Lost Update 與死鎖
-func (s *ExchangeServiceImpl) PlaceOrder(ctx context.Context, order *Order) error {
+func (s *ExchangeServiceImpl) PlaceOrder(ctx context.Context, order *Order) (err error) {
+	mode := "sync"
+	if s.eventBus != nil {
+		mode = "async"
+	}
+	start := time.Now()
+	defer func() {
+		metrics.ObserveOrder(mode, SideToString(order.Side), TypeToString(order.Type), err, time.Since(start))
+	}()
+
 	order.Symbol = strings.ToUpper(order.Symbol)
 	order.Price = order.Price.Round(8)
 	order.Quantity = order.Quantity.Round(8)
@@ -260,6 +269,8 @@ func (s *ExchangeServiceImpl) PlaceOrder(ctx context.Context, order *Order) erro
 
 		if err != nil {
 			log.Printf("原子結算事務失敗: %v", err)
+		} else {
+			metrics.AddTradesExecuted("sync", len(trades))
 		}
 	} else {
 		// 無成交：限價單已在第一事務（CreateOrder）完整寫入 DB，進入 OrderBook 排隊等候 Maker。
@@ -479,9 +490,4 @@ func (s *ExchangeServiceImpl) convertToMatchingOrder(order *Order) *matching.Ord
 
 	matchOrder.ID = order.ID
 	return matchOrder
-}
-
-// errIsNotFound 檢查是否為記錄找不到的錯誤（用於內部判斷）
-func errIsNotFound(err error) bool {
-	return errors.Is(err, errors.New("no rows in result set"))
 }

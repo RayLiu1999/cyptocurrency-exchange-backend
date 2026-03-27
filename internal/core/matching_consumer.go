@@ -8,32 +8,38 @@ import (
 
 	"github.com/RayLiu1999/exchange/internal/core/matching"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
 	"go.uber.org/zap"
 )
 
 // HandleMatchingEvent 是 Kafka exchange.orders Topic 的消費者 Handler。
 // 撮合引擎訂閱此 Topic，依照 EventType 路由至對應的處理函式。
 // 透過 symbol 作為 Partition Key，保證同一交易對的所有事件嚴格有序處理。
-func (s *ExchangeServiceImpl) HandleMatchingEvent(ctx context.Context, key, value []byte) error {
+func (s *ExchangeServiceImpl) HandleMatchingEvent(ctx context.Context, key, value []byte) (err error) {
+	start := time.Now()
+	defer func() {
+		metrics.ObserveKafkaEvent("matching", "exchange.orders", err, time.Since(start))
+	}()
+
 	// 第一步：只解碼 EventType 決定路由，避免反覆完整解析
 	var envelope struct {
 		EventType EventType `json:"event_type"`
 	}
-	if err := json.Unmarshal(value, &envelope); err != nil {
+	if err = json.Unmarshal(value, &envelope); err != nil {
 		return fmt.Errorf("解析 matching 事件失敗: %w", err)
 	}
 
 	switch envelope.EventType {
 	case EventOrderPlaced:
 		var event OrderPlacedEvent
-		if err := json.Unmarshal(value, &event); err != nil {
+		if err = json.Unmarshal(value, &event); err != nil {
 			return fmt.Errorf("解析 OrderPlacedEvent 失敗: %w", err)
 		}
 		return s.handleOrderPlaced(ctx, &event)
 
 	case EventOrderCancelRequested:
 		var event OrderCancelRequestedEvent
-		if err := json.Unmarshal(value, &event); err != nil {
+		if err = json.Unmarshal(value, &event); err != nil {
 			return fmt.Errorf("解析 OrderCancelRequestedEvent 失敗: %w", err)
 		}
 		return s.handleOrderCancelRequested(ctx, &event)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
@@ -17,9 +18,14 @@ import (
 // HandleSettlementEvent 是 Kafka exchange.settlements Topic 的消費者 Handler。
 // 執行 TX2（原子結算）：更新訂單狀態、寫入成交記錄、結算資金。
 // 實作冪等性：若成交記錄已存在則直接 Commit，避免重複結算。
-func (s *ExchangeServiceImpl) HandleSettlementEvent(ctx context.Context, key, value []byte) error {
+func (s *ExchangeServiceImpl) HandleSettlementEvent(ctx context.Context, key, value []byte) (err error) {
+	start := time.Now()
+	defer func() {
+		metrics.ObserveKafkaEvent("settlement", "exchange.settlements", err, time.Since(start))
+	}()
+
 	var event SettlementRequestedEvent
-	if err := json.Unmarshal(value, &event); err != nil {
+	if err = json.Unmarshal(value, &event); err != nil {
 		return fmt.Errorf("解析 SettlementRequestedEvent 失敗: %w", err)
 	}
 
@@ -51,7 +57,11 @@ func (s *ExchangeServiceImpl) HandleSettlementEvent(ctx context.Context, key, va
 		}
 	}
 
-	return s.executeSettlementTx(ctx, &event)
+	err = s.executeSettlementTx(ctx, &event)
+	if err == nil {
+		metrics.AddTradesExecuted("async", len(event.Trades))
+	}
+	return err
 }
 
 // executeSettlementTx 執行原子結算事務（TX2）。

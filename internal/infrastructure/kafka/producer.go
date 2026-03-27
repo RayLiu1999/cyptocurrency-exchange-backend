@@ -39,7 +39,7 @@ func NewProducer(cfg Config) (*Producer, error) {
 	defer cancel()
 	if err := client.Ping(ctx); err != nil {
 		client.Close()
-		return nil, fmt.Errorf("Kafka Broker 連線失敗: %w", err)
+		return nil, fmt.Errorf("kafka Broker 連線失敗: %w", err)
 	}
 
 	logger.Info("✅ Kafka Producer 連線成功", zap.Strings("brokers", cfg.Brokers))
