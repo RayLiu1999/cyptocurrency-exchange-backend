@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/RayLiu1999/exchange/internal/core"
+	"github.com/RayLiu1999/exchange/internal/domain"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -38,18 +38,18 @@ func (h *Handler) PlaceOrder(c *gin.Context) {
 		return
 	}
 
-	side, err := core.SideFromString(req.Side)
+	side, err := domain.SideFromString(req.Side)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	orderType, err := core.TypeFromString(req.Type)
+	orderType, err := domain.TypeFromString(req.Type)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	order := &core.Order{
+	order := &domain.Order{
 		UserID:   userID,
 		Symbol:   req.Symbol,
 		Side:     side,
@@ -58,7 +58,7 @@ func (h *Handler) PlaceOrder(c *gin.Context) {
 		Quantity: req.Quantity,
 	}
 
-	if err := h.svc.PlaceOrder(c.Request.Context(), order); err != nil {
+	if err := h.orderSvc.PlaceOrder(c.Request.Context(), order); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -78,7 +78,7 @@ func (h *Handler) GetOrder(c *gin.Context) {
 		return
 	}
 
-	order, err := h.svc.GetOrder(c.Request.Context(), orderID)
+	order, err := h.orderSvc.GetOrder(c.Request.Context(), orderID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "訂單不存在"})
 		return
@@ -88,12 +88,12 @@ func (h *Handler) GetOrder(c *gin.Context) {
 		"id":              order.ID,
 		"user_id":         order.UserID,
 		"symbol":          order.Symbol,
-		"side":            core.SideToString(order.Side),
-		"type":            core.TypeToString(order.Type),
+		"side":            domain.SideToString(order.Side),
+		"type":            domain.TypeToString(order.Type),
 		"price":           order.Price,
 		"quantity":        order.Quantity,
 		"filled_quantity": order.FilledQuantity,
-		"status":          core.StatusToString(order.Status),
+		"status":          domain.StatusToString(order.Status),
 		"created_at":      order.CreatedAt,
 	})
 }
@@ -112,7 +112,7 @@ func (h *Handler) GetOrders(c *gin.Context) {
 		return
 	}
 
-	orders, err := h.svc.GetOrdersByUser(c.Request.Context(), userID)
+	orders, err := h.orderSvc.GetOrdersByUser(c.Request.Context(), userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -123,9 +123,9 @@ func (h *Handler) GetOrders(c *gin.Context) {
 		result[i] = gin.H{
 			"id":              order.ID,
 			"symbol":          order.Symbol,
-			"side":            core.SideToString(order.Side),
-			"type":            core.TypeToString(order.Type),
-			"status":          core.StatusToString(order.Status),
+			"side":            domain.SideToString(order.Side),
+			"type":            domain.TypeToString(order.Type),
+			"status":          domain.StatusToString(order.Status),
 			"price":           order.Price,
 			"quantity":        order.Quantity,
 			"filled_quantity": order.FilledQuantity,
@@ -161,7 +161,7 @@ func (h *Handler) CancelOrder(c *gin.Context) {
 		return
 	}
 
-	if err := h.svc.CancelOrder(c.Request.Context(), orderID, userID); err != nil {
+	if err := h.orderSvc.CancelOrder(c.Request.Context(), orderID, userID); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

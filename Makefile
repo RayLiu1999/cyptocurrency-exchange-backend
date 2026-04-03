@@ -1,9 +1,12 @@
-.PHONY: build build-server build-gateway build-order-service build-matching-engine build-market-data-service test lint fmt tidy clean dev-up dev-down dev-logs test-up test-down test-logs db-migrate db-seed db-fresh help
+.PHONY: build build-server build-gateway build-order-service build-matching-engine build-market-data-service build-simulation-service test lint fmt tidy clean dev-up dev-down dev-logs test-up test-down test-logs db-migrate db-seed db-fresh help
 
 # 變數定義
 BUILD_DIR=.
 DB_USER=postgres
+DB_PASSWORD?=123qwe
 DB_NAME=exchange
+REDIS_PASSWORD?=123qwe
+DB_CONTAINER ?= postgres
 BASE_URL ?= http://localhost:8100/api/v1
 SYMBOL ?= BTC-USD
 K6_ENV_FLAGS ?=
@@ -18,7 +21,7 @@ help: ## 顯示所有可用指令
 	@echo "可用指令:"
 	@grep -h -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-build: build-gateway build-order-service build-matching-engine build-market-data-service ## 編譯微服務專案 (本地)
+build: build-gateway build-order-service build-matching-engine build-market-data-service build-simulation-service ## 編譯微服務專案 (本地)
 	@echo "✅ 微服務編譯完成"
 
 build-server: ## 編譯單體版本 (相容保留)
@@ -45,6 +48,11 @@ build-market-data-service: ## 編譯 market-data-service
 	@echo "📦 編譯 market-data-service..."
 	go build -o $(BUILD_DIR)/market-data-service ./cmd/market-data-service
 	@echo "✅ 編譯完成: ./market-data-service"
+
+build-simulation-service: ## 編譯 simulation-service
+	@echo "📦 編譯 simulation-service..."
+	go build -o $(BUILD_DIR)/simulation-service ./cmd/simulation-service
+	@echo "✅ 編譯完成: ./simulation-service"
 
 test: ## 執行基礎單元測試 (不含整合測試)
 	@echo "🧪 執行基礎單元測試..."
@@ -118,21 +126,38 @@ test-build: ## 編譯 Docker 鏡像 (測試環境)
 
 test-logs: ## 查看測試環境日誌
 	docker compose -f docker-compose.test.yml logs -f ${SERVICE_NAME:-gateway}
+
+# --- 基礎設施管理 (Infrastructure) ---
+
+infra-up: ## 啟動基礎設施 (Postgres, Redis, Kafka)
+	@echo "🚀 啟動基礎設施..."
+	docker compose -f deploy/docker-compose.infra.yml up -d
+	@echo "⏳ 等待資料庫 Ready..."
+	@until docker exec $(DB_CONTAINER) pg_isready -U $(DB_USER) -d $(DB_NAME) > /dev/null 2>&1; do \
+		echo "Waiting for database..."; \
+		sleep 2; \
+	done
+	@echo "✅ 基礎設施已啟動"
+
+infra-down: ## 停止基礎設施
+	@echo "🛑 停止基礎設施..."
+	docker compose -f deploy/docker-compose.infra.yml down
+
 # --- 資料庫輔助指令 (需確保 Postgres 容器已啟動) ---
 
 db-migrate: ## 執行資料庫 Migration
 	@echo "📊 執行 Migration..."
-	docker exec -i postgres psql -U $(DB_USER) -d $(DB_NAME) < sql/schema.sql
+	docker exec -i $(DB_CONTAINER) psql -U $(DB_USER) -d $(DB_NAME) < sql/schema.sql
 	@echo "✅ Migration 完成"
 
 db-seed: ## 插入測試資料
 	@echo "🌱 插入測試資料..."
-	docker exec -i postgres psql -U $(DB_USER) -d $(DB_NAME) < sql/seed.sql
+	docker exec -i $(DB_CONTAINER) psql -U $(DB_USER) -d $(DB_NAME) < sql/seed.sql
 	@echo "✅ 測試資料插入完成"
 
 db-fresh: ## 清空並重建資料庫表結構
 	@echo "🧹 清空並重建 Public Schema..."
-	docker exec -i postgres psql -U $(DB_USER) -d $(DB_NAME) -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+	docker exec -i $(DB_CONTAINER) psql -U $(DB_USER) -d $(DB_NAME) -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 	$(MAKE) db-migrate
 	@echo "✅ 資料庫表結構已清空並重建"
 

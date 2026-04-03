@@ -6,9 +6,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/RayLiu1999/exchange/internal/core"
-	"github.com/RayLiu1999/exchange/internal/core/matching"
+	"github.com/RayLiu1999/exchange/internal/domain"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
+	"github.com/RayLiu1999/exchange/internal/marketdata"
+	"github.com/RayLiu1999/exchange/internal/matching/engine"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -56,10 +57,10 @@ func NewWebSocketHandler(serviceName string) *WebSocketHandler {
 }
 
 // Ensure implementation
-var _ core.TradeEventListener = (*WebSocketHandler)(nil)
+var _ marketdata.TradeEventListener = (*WebSocketHandler)(nil)
 
 // OnOrderBookUpdate 實作 TradeEventListener 介面 — 推播掛單簿深度快照
-func (h *WebSocketHandler) OnOrderBookUpdate(snapshot *matching.OrderBookSnapshot) {
+func (h *WebSocketHandler) OnOrderBookUpdate(snapshot *engine.OrderBookSnapshot) {
 	msg := map[string]any{
 		"type": "depth_snapshot",
 		"data": snapshot,
@@ -75,7 +76,7 @@ func (h *WebSocketHandler) OnOrderBookUpdate(snapshot *matching.OrderBookSnapsho
 }
 
 // OnTrade 實作 TradeEventListener 介面
-func (h *WebSocketHandler) OnTrade(trade *matching.Trade) {
+func (h *WebSocketHandler) OnTrade(trade *engine.Trade) {
 	// 轉換為 JSON 訊息
 	msg := map[string]any{
 		"type": "trade",
@@ -100,19 +101,19 @@ func (h *WebSocketHandler) OnTrade(trade *matching.Trade) {
 }
 
 // OnOrderUpdate 實作 TradeEventListener 介面
-func (h *WebSocketHandler) OnOrderUpdate(order *core.Order) {
+func (h *WebSocketHandler) OnOrderUpdate(order *domain.Order) {
 	msg := map[string]any{
 		"type": "order_update",
 		"data": map[string]any{
 			"id":              order.ID,
 			"user_id":         order.UserID,
 			"symbol":          order.Symbol,
-			"side":            core.SideToString(order.Side),
+			"side":            domain.SideToString(order.Side),
 			"type":            order.Type,
 			"price":           order.Price,
 			"quantity":        order.Quantity,
 			"filled_quantity": order.FilledQuantity,
-			"status":          core.StatusToString(order.Status),
+			"status":          domain.StatusToString(order.Status),
 			"created_at":      order.CreatedAt,
 			"updated_at":      order.UpdatedAt,
 		},

@@ -10,7 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/RayLiu1999/exchange/internal/core"
+	"github.com/RayLiu1999/exchange/internal/domain"
+	"github.com/RayLiu1999/exchange/internal/order"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
@@ -42,7 +43,7 @@ type Trader struct {
 }
 
 type Service struct {
-	svc     core.ExchangeService
+	svc     order.OrderService
 	mu      sync.Mutex
 	status  Status
 	running bool
@@ -50,7 +51,7 @@ type Service struct {
 	sentTx  int64
 }
 
-func NewService(svc core.ExchangeService) *Service {
+func NewService(svc order.OrderService) *Service {
 	return &Service{svc: svc}
 }
 
@@ -203,20 +204,20 @@ func (s *Service) runSimulation(ctx context.Context, traders []Trader, cfg Confi
 				refPrice := currentPrice
 				priceMu.Unlock()
 
-				side := core.SideBuy
+				side := domain.SideBuy
 				if r.Intn(2) == 0 {
-					side = core.SideSell
+					side = domain.SideSell
 				}
 
-				orderType := core.TypeLimit
+				orderType := domain.TypeLimit
 				price := refPrice
 
 				if trader.Role == "TAKER" {
 					if r.Float64() < 0.8 {
-						orderType = core.TypeMarket
+						orderType = domain.TypeMarket
 						price = 0
 					} else {
-						if side == core.SideBuy {
+						if side == domain.SideBuy {
 							price = refPrice * 1.02
 						} else {
 							price = refPrice * 0.98
@@ -224,7 +225,7 @@ func (s *Service) runSimulation(ctx context.Context, traders []Trader, cfg Confi
 					}
 				} else {
 					spread := r.Float64() * 0.02 * refPrice
-					if side == core.SideBuy {
+					if side == domain.SideBuy {
 						price = refPrice - spread
 					} else {
 						price = refPrice + spread
@@ -233,7 +234,7 @@ func (s *Service) runSimulation(ctx context.Context, traders []Trader, cfg Confi
 
 				qty := decimal.NewFromFloat(0.1 + r.Float64())
 
-				order := &core.Order{
+				order := &domain.Order{
 					UserID:   trader.ID,
 					Symbol:   cfg.Symbol,
 					Side:     side,
@@ -244,7 +245,7 @@ func (s *Service) runSimulation(ctx context.Context, traders []Trader, cfg Confi
 
 				if err := s.svc.PlaceOrder(ctx, order); err != nil {
 					log.Printf("❌ 模擬下單失敗: %v", err)
-					if errors.Is(err, core.ErrInsufficientFunds) || strings.Contains(err.Error(), "餘額不足") {
+					if errors.Is(err, domain.ErrInsufficientFunds) || strings.Contains(err.Error(), "餘額不足") {
 						log.Printf("⚠️ 觸發自動加值...")
 						s.svc.RechargeTestUser(ctx, trader.ID)
 					}

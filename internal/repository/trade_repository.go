@@ -4,14 +4,14 @@ import (
 	"context"
 	"time"
 
-	"github.com/RayLiu1999/exchange/internal/core"
-	"github.com/RayLiu1999/exchange/internal/core/matching"
+	"github.com/RayLiu1999/exchange/internal/domain"
+	"github.com/RayLiu1999/exchange/internal/matching/engine"
 	"github.com/google/uuid"
 )
 
 // --- TradeRepository Implementation ---
 
-func (r *PostgresRepository) CreateTrade(ctx context.Context, trade *matching.Trade) error {
+func (r *PostgresRepository) CreateTrade(ctx context.Context, trade *engine.Trade) error {
 	executor := r.getExecutor(ctx)
 	query := `
 		INSERT INTO trades (id, symbol, maker_order_id, taker_order_id, price, quantity, created_at)
@@ -63,7 +63,7 @@ func parseIntervalMs(interval string) int64 {
 	}
 }
 
-func (r *PostgresRepository) GetKLines(ctx context.Context, symbol string, interval string, limit int) ([]*core.KLine, error) {
+func (r *PostgresRepository) GetKLines(ctx context.Context, symbol string, interval string, limit int) ([]*domain.KLine, error) {
 	executor := r.getExecutor(ctx)
 
 	intervalMs := parseIntervalMs(interval)
@@ -90,9 +90,9 @@ func (r *PostgresRepository) GetKLines(ctx context.Context, symbol string, inter
 	}
 	defer rows.Close()
 
-	var klines []*core.KLine
+	var klines []*domain.KLine
 	for rows.Next() {
-		var k core.KLine
+		var k domain.KLine
 		err := rows.Scan(&k.Timestamp, &k.Open, &k.High, &k.Low, &k.Close, &k.Volume)
 		if err != nil {
 			return nil, err
@@ -105,7 +105,7 @@ func (r *PostgresRepository) GetKLines(ctx context.Context, symbol string, inter
 	return klines, nil
 }
 
-func (r *PostgresRepository) GetRecentTrades(ctx context.Context, symbol string, limit int) ([]*matching.Trade, error) {
+func (r *PostgresRepository) GetRecentTrades(ctx context.Context, symbol string, limit int) ([]*engine.Trade, error) {
 	executor := r.getExecutor(ctx)
 	query := `
 		SELECT id, symbol, maker_order_id, taker_order_id, price, quantity, created_at
@@ -120,9 +120,9 @@ func (r *PostgresRepository) GetRecentTrades(ctx context.Context, symbol string,
 	}
 	defer rows.Close()
 
-	var trades []*matching.Trade
+	var trades []*engine.Trade
 	for rows.Next() {
-		var t matching.Trade
+		var t engine.Trade
 		err := rows.Scan(&t.ID, &t.Symbol, &t.MakerOrderID, &t.TakerOrderID, &t.Price, &t.Quantity, &t.CreatedAt)
 		if err != nil {
 			return nil, err

@@ -10,15 +10,23 @@ import (
 	"time"
 
 	"github.com/RayLiu1999/exchange/internal/api"
-	"github.com/RayLiu1999/exchange/internal/core"
+	"github.com/RayLiu1999/exchange/internal/domain"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/kafka"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/redis"
+	"github.com/RayLiu1999/exchange/internal/marketdata"
+	"github.com/RayLiu1999/exchange/internal/repository"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
 
+// market-data-service: 行情推播服務
+// 職責：消費 Kafka 行情事件，透過 WebSocket 即時推播至前端
+// 消費 Kafka：exchange.orderbook, exchange.trades, exchange.order_updates
+// 無資料庫依賴，無 DB 寫入，純事件轉發
 func main() {
 	defer logger.Sync()
 
@@ -27,35 +35,68 @@ func main() {
 		kafkaCfg.Brokers = strings.Split(brokers, ",")
 	}
 
+	// Connect to Database for queries
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		logger.Log.Fatal("market-data-service: DATABASE_URL 環境變數未設定")
+	}
+	pool, err := pgxpool.New(context.Background(), dbURL)
+	if err != nil {
+		logger.Log.Fatal("market-data-service: 無法連接資料庫", zap.Error(err))
+	}
+	defer pool.Close()
+
+	repo := repository.NewPostgresRepository(pool)
+
+	redisCfg := redis.DefaultConfig()
+	if redisAddr := os.Getenv("REDIS_URL"); redisAddr != "" {
+		redisCfg.Addr = redisAddr
+	}
+	redisClient, redisErr := redis.NewClient(redisCfg)
+	if redisErr != nil {
+		logger.Log.Warn("Redis 不可用", zap.Error(redisErr))
+	}
+	var cacheRepo domain.CacheRepository
+	if redisClient != nil {
+		cacheRepo = repository.NewRedisCacheRepository(redisClient)
+	}
+
+	// MarketDataService
 	wsHandler := api.NewWebSocketHandler("market-data-service")
 	go wsHandler.Run()
 
-	svc := core.NewExchangeService(nil, nil, nil, nil, nil, "BTC-USD", wsHandler, nil, nil, nil)
+	// MarketData Service
+	svc := marketdata.NewService(wsHandler, cacheRepo)
 
+	querySvc := marketdata.NewQueryService(repo, cacheRepo)
+
+	// 8. 啟動 Kafka Consumers
 	consumerCtx, cancelConsumers := context.WithCancel(context.Background())
 	var orderBookConsumer *kafka.Consumer
 	var tradeConsumer *kafka.Consumer
 	var orderUpdateConsumer *kafka.Consumer
-
-	var err error
-	orderBookConsumer, err = kafka.NewConsumer(kafkaCfg, "market-data-orderbook", []string{core.TopicOrderBook})
+	
+	orderBookConsumer, err = kafka.NewConsumer(kafkaCfg, "market-data-orderbook", []string{domain.TopicOrderBook})
 	if err != nil {
-		logger.Log.Fatal("market-data-service: 無法建立 orderbook consumer", zap.Error(err))
+		logger.Log.Fatal("market-data-service: 建立 orderbook consumer 失敗", zap.Error(err))
 	}
-	orderBookConsumer.Start(consumerCtx, svc.HandleOrderBookEvent)
+	orderBookConsumer.Start(consumerCtx, svc.HandleOrderBook)
+	logger.Log.Info("OrderBook consumer 已啟動", zap.String("topic", domain.TopicOrderBook))
 
-	tradeConsumer, err = kafka.NewConsumer(kafkaCfg, "market-data-trades", []string{core.TopicTrades})
+	tradeConsumer, err = kafka.NewConsumer(kafkaCfg, "market-data-trades", []string{domain.TopicTrades})
 	if err != nil {
-		logger.Log.Fatal("market-data-service: 無法建立 trade consumer", zap.Error(err))
+		logger.Log.Fatal("market-data-service: 建立 trade consumer 失敗", zap.Error(err))
 	}
-	tradeConsumer.Start(consumerCtx, svc.HandleTradeEvent)
+	tradeConsumer.Start(consumerCtx, svc.HandleTrade)
+	logger.Log.Info("Trade consumer 已啟動", zap.String("topic", domain.TopicTrades))
 
-	orderUpdateConsumer, err = kafka.NewConsumer(kafkaCfg, "market-data-order-updates", []string{core.TopicOrderUpdates})
+	orderUpdateConsumer, err = kafka.NewConsumer(kafkaCfg, "market-data-order-updates", []string{domain.TopicOrderUpdates})
 	if err != nil {
-		logger.Log.Fatal("market-data-service: 無法建立 order update consumer", zap.Error(err))
+		logger.Log.Fatal("market-data-service: 建立 order-update consumer 失敗", zap.Error(err))
 	}
-	orderUpdateConsumer.Start(consumerCtx, svc.HandleOrderUpdatedEvent)
+	orderUpdateConsumer.Start(consumerCtx, svc.HandleOrderUpdated)
 
+	// HTTP 伺服器
 	r := gin.Default()
 	r.Use(metrics.Middleware("market-data-service"))
 	r.Use(cors.New(cors.Config{
@@ -71,23 +112,31 @@ func main() {
 	})
 	r.GET("/ws", wsHandler.HandleWS)
 
+	handler := api.NewHandler(nil, querySvc)
+	v1 := r.Group("/api/v1")
+	// market-data-service 負責公開查詢
+	v1.GET("/orderbook", handler.GetOrderBook)
+	v1.GET("/klines", handler.GetKLines)
+	v1.GET("/trades", handler.GetRecentTrades)
+
 	port := os.Getenv("MARKET_DATA_PORT")
 	if port == "" {
-		port = "8083"
+		port = "8102"
 	}
 	srv := &http.Server{Addr: ":" + port, Handler: r}
 
 	go func() {
-		logger.Log.Info("market-data-service started", zap.String("port", port))
+		logger.Log.Info("market-data-service 已啟動", zap.String("port", port))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Log.Fatal("market-data-service 啟動失敗", zap.Error(err))
 		}
 	}()
 
+	// 優雅關機
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	logger.Log.Info("market-data-service shutdown signal received")
+	logger.Log.Info("market-data-service 收到關閉訊號")
 
 	cancelConsumers()
 	shutdownDone := make(chan struct{})
@@ -106,15 +155,15 @@ func main() {
 
 	select {
 	case <-shutdownDone:
-		logger.Log.Info("market-data Kafka consumers closed")
+		logger.Log.Info("market-data Kafka consumers 已關閉")
 	case <-time.After(10 * time.Second):
-		logger.Log.Warn("market-data consumer close timeout, forcing shutdown")
+		logger.Log.Warn("market-data consumer 等待超時，強制繼續關機")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
-		logger.Log.Error("market-data-service forced shutdown", zap.Error(err))
+		logger.Log.Error("market-data-service 強制關閉", zap.Error(err))
 	}
-	logger.Log.Info("market-data-service shutdown complete")
+	logger.Log.Info("market-data-service 優雅關機完成")
 }

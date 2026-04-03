@@ -10,7 +10,7 @@ import (
 
 // JoinArena 註冊匿名用戶
 func (h *Handler) JoinArena(c *gin.Context) {
-	user, accounts, err := h.svc.RegisterAnonymousUser(c.Request.Context())
+	user, accounts, err := h.orderSvc.RegisterAnonymousUser(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -28,6 +28,22 @@ func (h *Handler) JoinArena(c *gin.Context) {
 	})
 }
 
+// RechargeTestUser 為測試用戶補充資金（模擬器專用）
+func (h *Handler) RechargeTestUser(c *gin.Context) {
+	userID, err := uuid.Parse(c.Param("user_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "無效的 user_id"})
+		return
+	}
+
+	if err := h.orderSvc.RechargeTestUser(c.Request.Context(), userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "充值成功"})
+}
+
 // GetBalances 取得用戶餘額
 func (h *Handler) GetBalances(c *gin.Context) {
 	userIDStr := c.Query("user_id")
@@ -42,7 +58,7 @@ func (h *Handler) GetBalances(c *gin.Context) {
 		return
 	}
 
-	accounts, err := h.svc.GetBalances(c.Request.Context(), userID)
+	accounts, err := h.orderSvc.GetBalances(c.Request.Context(), userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

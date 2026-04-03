@@ -88,6 +88,27 @@ services:
       - redpanda_default
       - prometheus-grafana_default
 
+  simulation-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: simulation-service
+    container_name: exchange-simulation-service-prod
+    ports:
+      - "${SIMULATION_SERVICE_PORT:-8104}:${SIMULATION_SERVICE_PORT:-8104}"
+    env_file:
+      - .env
+    environment:
+      GIN_MODE: release
+    depends_on:
+      - gateway
+    networks:
+      - postgres_default
+      - redis_default
+      - redpanda_default
+      - prometheus-grafana_default
+
 networks:
   postgres_default:
     external: true

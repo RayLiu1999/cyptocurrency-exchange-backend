@@ -26,12 +26,12 @@ type Worker struct {
 }
 
 // NewWorker 建立一個新的 Outbox Worker
-func NewWorker(repo *Repository, publisher Publisher) *Worker {
+func NewWorker(repo *Repository, publisher Publisher, interval time.Duration, batchSize int) *Worker {
 	return &Worker{
 		repo:      repo,
 		publisher: publisher,
-		interval:  3 * time.Second, // 每 3 秒掃描一次
-		batchSize: 100,             // 每批最多處理 100 筆
+		interval:  interval,  // 定時掃描間隔
+		batchSize: batchSize, // 每批處理數量
 	}
 }
 

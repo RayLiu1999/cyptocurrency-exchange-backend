@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RayLiu1999/exchange/internal/core"
-	"github.com/RayLiu1999/exchange/internal/core/matching"
+	"github.com/RayLiu1999/exchange/internal/domain"
+	"github.com/RayLiu1999/exchange/internal/matching/engine"
 	"github.com/RayLiu1999/exchange/internal/repository"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -37,13 +37,13 @@ func setupTestDB(t *testing.T) *repository.PostgresRepository {
 	return repository.NewPostgresRepository(pool)
 }
 
-func createTestUser(t *testing.T, repo *repository.PostgresRepository) *core.User {
+func createTestUser(t *testing.T, repo *repository.PostgresRepository) *domain.User {
 	t.Helper()
 	ctx := context.Background()
 	userID, err := uuid.NewV7()
 	require.NoError(t, err)
 	now := time.Now().UnixMilli()
-	user := &core.User{
+	user := &domain.User{
 		ID:           userID,
 		Email:        fmt.Sprintf("int-test-%s@test.local", userID),
 		PasswordHash: "hash_not_used",
@@ -63,19 +63,19 @@ func cleanupUser(ctx context.Context, repo *repository.PostgresRepository, userI
 	pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
 }
 
-func makeLimitOrder(userID uuid.UUID, side core.OrderSide, price string) *core.Order {
+func makeLimitOrder(userID uuid.UUID, side domain.OrderSide, price string) *domain.Order {
 	orderID, _ := uuid.NewV7()
 	now := time.Now().UnixMilli()
-	return &core.Order{
+	return &domain.Order{
 		ID:             orderID,
 		UserID:         userID,
 		Symbol:         "BTC-USD",
 		Side:           side,
-		Type:           core.TypeLimit,
+		Type:           domain.TypeLimit,
 		Price:          decimal.RequireFromString(price),
 		Quantity:       decimal.NewFromInt(1),
 		FilledQuantity: decimal.Zero,
-		Status:         core.StatusNew,
+		Status:         domain.StatusNew,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -87,7 +87,7 @@ func TestAccountRepository_CreateAndGet(t *testing.T) {
 	ctx := context.Background()
 	accountID, _ := uuid.NewV7()
 	now := time.Now().UnixMilli()
-	acc := &core.Account{
+	acc := &domain.Account{
 		ID: accountID, UserID: user.ID, Currency: "USD",
 		Balance: decimal.NewFromInt(10000), Locked: decimal.Zero,
 		CreatedAt: now, UpdatedAt: now,
@@ -106,7 +106,7 @@ func TestAccountRepository_CreateAccount_DuplicateIsIgnored(t *testing.T) {
 	ctx := context.Background()
 	accountID, _ := uuid.NewV7()
 	now := time.Now().UnixMilli()
-	acc := &core.Account{
+	acc := &domain.Account{
 		ID: accountID, UserID: user.ID, Currency: "BTC",
 		Balance: decimal.NewFromInt(5), Locked: decimal.Zero,
 		CreatedAt: now, UpdatedAt: now,
@@ -121,7 +121,7 @@ func TestAccountRepository_LockAndUnlockFunds(t *testing.T) {
 	ctx := context.Background()
 	accountID, _ := uuid.NewV7()
 	now := time.Now().UnixMilli()
-	require.NoError(t, repo.CreateAccount(ctx, &core.Account{
+	require.NoError(t, repo.CreateAccount(ctx, &domain.Account{
 		ID: accountID, UserID: user.ID, Currency: "USD",
 		Balance: decimal.NewFromInt(100), Locked: decimal.Zero,
 		CreatedAt: now, UpdatedAt: now,
@@ -142,7 +142,7 @@ func TestAccountRepository_LockFunds_InsufficientFunds_ReturnsError(t *testing.T
 	ctx := context.Background()
 	accountID, _ := uuid.NewV7()
 	now := time.Now().UnixMilli()
-	require.NoError(t, repo.CreateAccount(ctx, &core.Account{
+	require.NoError(t, repo.CreateAccount(ctx, &domain.Account{
 		ID: accountID, UserID: user.ID, Currency: "USD",
 		Balance: decimal.NewFromInt(10), Locked: decimal.Zero,
 		CreatedAt: now, UpdatedAt: now,
@@ -158,7 +158,7 @@ func TestAccountRepository_GetAccountsByUser(t *testing.T) {
 	now := time.Now().UnixMilli()
 	for _, currency := range []string{"BTC", "USD"} {
 		id, _ := uuid.NewV7()
-		require.NoError(t, repo.CreateAccount(ctx, &core.Account{
+		require.NoError(t, repo.CreateAccount(ctx, &domain.Account{
 			ID: id, UserID: user.ID, Currency: currency,
 			Balance: decimal.NewFromInt(1), Locked: decimal.Zero,
 			CreatedAt: now, UpdatedAt: now,
@@ -173,30 +173,30 @@ func TestOrderRepository_CreateAndGet(t *testing.T) {
 	repo := setupTestDB(t)
 	user := createTestUser(t, repo)
 	ctx := context.Background()
-	order := makeLimitOrder(user.ID, core.SideBuy, "50000")
+	order := makeLimitOrder(user.ID, domain.SideBuy, "50000")
 	require.NoError(t, repo.CreateOrder(ctx, order))
 	fetched, err := repo.GetOrder(ctx, order.ID)
 	require.NoError(t, err)
 	assert.Equal(t, order.ID, fetched.ID)
 	assert.Equal(t, user.ID, fetched.UserID)
-	assert.Equal(t, core.SideBuy, fetched.Side)
+	assert.Equal(t, domain.SideBuy, fetched.Side)
 	assert.True(t, order.Price.Equal(fetched.Price))
-	assert.Equal(t, core.StatusNew, fetched.Status)
+	assert.Equal(t, domain.StatusNew, fetched.Status)
 }
 
 func TestOrderRepository_UpdateOrder(t *testing.T) {
 	repo := setupTestDB(t)
 	user := createTestUser(t, repo)
 	ctx := context.Background()
-	order := makeLimitOrder(user.ID, core.SideSell, "51000")
+	order := makeLimitOrder(user.ID, domain.SideSell, "51000")
 	require.NoError(t, repo.CreateOrder(ctx, order))
 	order.FilledQuantity = decimal.NewFromFloat(0.5)
-	order.Status = core.StatusPartiallyFilled
+	order.Status = domain.StatusPartiallyFilled
 	order.UpdatedAt = time.Now().UnixMilli()
 	require.NoError(t, repo.UpdateOrder(ctx, order))
 	fetched, _ := repo.GetOrder(ctx, order.ID)
 	assert.True(t, decimal.NewFromFloat(0.5).Equal(fetched.FilledQuantity))
-	assert.Equal(t, core.StatusPartiallyFilled, fetched.Status)
+	assert.Equal(t, domain.StatusPartiallyFilled, fetched.Status)
 }
 
 func TestOrderRepository_GetOrdersByUser(t *testing.T) {
@@ -204,7 +204,7 @@ func TestOrderRepository_GetOrdersByUser(t *testing.T) {
 	user := createTestUser(t, repo)
 	ctx := context.Background()
 	for i := range 3 {
-		o := makeLimitOrder(user.ID, core.SideBuy, fmt.Sprintf("%d", 49000+i*1000))
+		o := makeLimitOrder(user.ID, domain.SideBuy, fmt.Sprintf("%d", 49000+i*1000))
 		require.NoError(t, repo.CreateOrder(ctx, o))
 	}
 	orders, err := repo.GetOrdersByUser(ctx, user.ID)
@@ -216,14 +216,14 @@ func TestOrderRepository_GetActiveOrders_OnlyNewAndPartial(t *testing.T) {
 	repo := setupTestDB(t)
 	user := createTestUser(t, repo)
 	ctx := context.Background()
-	newOrder := makeLimitOrder(user.ID, core.SideBuy, "50000")
+	newOrder := makeLimitOrder(user.ID, domain.SideBuy, "50000")
 	require.NoError(t, repo.CreateOrder(ctx, newOrder))
-	partialOrder := makeLimitOrder(user.ID, core.SideSell, "51000")
-	partialOrder.Status = core.StatusPartiallyFilled
+	partialOrder := makeLimitOrder(user.ID, domain.SideSell, "51000")
+	partialOrder.Status = domain.StatusPartiallyFilled
 	partialOrder.FilledQuantity = decimal.NewFromFloat(0.3)
 	require.NoError(t, repo.CreateOrder(ctx, partialOrder))
-	filledOrder := makeLimitOrder(user.ID, core.SideBuy, "49000")
-	filledOrder.Status = core.StatusFilled
+	filledOrder := makeLimitOrder(user.ID, domain.SideBuy, "49000")
+	filledOrder.Status = domain.StatusFilled
 	filledOrder.FilledQuantity = decimal.NewFromInt(1)
 	require.NoError(t, repo.CreateOrder(ctx, filledOrder))
 	activeOrders, err := repo.GetActiveOrders(ctx)
@@ -242,12 +242,12 @@ func TestTradeRepository_CreateTrade(t *testing.T) {
 	buyer := createTestUser(t, repo)
 	seller := createTestUser(t, repo)
 	ctx := context.Background()
-	buyOrder := makeLimitOrder(buyer.ID, core.SideBuy, "50000")
-	sellOrder := makeLimitOrder(seller.ID, core.SideSell, "50000")
+	buyOrder := makeLimitOrder(buyer.ID, domain.SideBuy, "50000")
+	sellOrder := makeLimitOrder(seller.ID, domain.SideSell, "50000")
 	require.NoError(t, repo.CreateOrder(ctx, buyOrder))
 	require.NoError(t, repo.CreateOrder(ctx, sellOrder))
 	tradeID, _ := uuid.NewV7()
-	trade := &matching.Trade{
+	trade := &engine.Trade{
 		ID:           tradeID,
 		Symbol:       "BTC-USD",
 		MakerOrderID: sellOrder.ID,
@@ -264,12 +264,12 @@ func TestTradeRepository_GetRecentTrades(t *testing.T) {
 	buyer := createTestUser(t, repo)
 	seller := createTestUser(t, repo)
 	ctx := context.Background()
-	buyOrder := makeLimitOrder(buyer.ID, core.SideBuy, "50000")
-	sellOrder := makeLimitOrder(seller.ID, core.SideSell, "50000")
+	buyOrder := makeLimitOrder(buyer.ID, domain.SideBuy, "50000")
+	sellOrder := makeLimitOrder(seller.ID, domain.SideSell, "50000")
 	require.NoError(t, repo.CreateOrder(ctx, buyOrder))
 	require.NoError(t, repo.CreateOrder(ctx, sellOrder))
 	tradeID, _ := uuid.NewV7()
-	trade := &matching.Trade{
+	trade := &engine.Trade{
 		ID:           tradeID,
 		Symbol:       "BTC-USD",
 		MakerOrderID: sellOrder.ID,
@@ -296,7 +296,7 @@ func TestExecTx_Success_AllStepsCommitted(t *testing.T) {
 	err := repo.ExecTx(ctx, func(txCtx context.Context) error {
 		accountID, _ := uuid.NewV7()
 		now := time.Now().UnixMilli()
-		if err := repo.CreateAccount(txCtx, &core.Account{
+		if err := repo.CreateAccount(txCtx, &domain.Account{
 			ID: accountID, UserID: user.ID, Currency: "USD",
 			Balance: decimal.NewFromInt(5000), Locked: decimal.Zero,
 			CreatedAt: now, UpdatedAt: now,
@@ -306,7 +306,7 @@ func TestExecTx_Success_AllStepsCommitted(t *testing.T) {
 		if err := repo.LockFunds(txCtx, user.ID, "USD", decimal.NewFromInt(5000)); err != nil {
 			return err
 		}
-		order := makeLimitOrder(user.ID, core.SideBuy, "50000")
+		order := makeLimitOrder(user.ID, domain.SideBuy, "50000")
 		createdOrderID = order.ID
 		return repo.CreateOrder(txCtx, order)
 	})
@@ -326,14 +326,14 @@ func TestExecTx_Failure_ChangesRolledBack(t *testing.T) {
 	err := repo.ExecTx(ctx, func(txCtx context.Context) error {
 		accountID, _ := uuid.NewV7()
 		now := time.Now().UnixMilli()
-		if err := repo.CreateAccount(txCtx, &core.Account{
+		if err := repo.CreateAccount(txCtx, &domain.Account{
 			ID: accountID, UserID: user.ID, Currency: "BTC",
 			Balance: decimal.NewFromInt(2), Locked: decimal.Zero,
 			CreatedAt: now, UpdatedAt: now,
 		}); err != nil {
 			return err
 		}
-		order := makeLimitOrder(user.ID, core.SideSell, "51000")
+		order := makeLimitOrder(user.ID, domain.SideSell, "51000")
 		rolledBackOrderID = order.ID
 		if err := repo.CreateOrder(txCtx, order); err != nil {
 			return err

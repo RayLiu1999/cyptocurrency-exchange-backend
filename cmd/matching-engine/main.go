@@ -9,54 +9,56 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/RayLiu1999/exchange/internal/core"
+	"github.com/RayLiu1999/exchange/internal/domain"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/kafka"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/redis"
+	"github.com/RayLiu1999/exchange/internal/matching"
+	"github.com/RayLiu1999/exchange/internal/matching/engine"
 	"github.com/RayLiu1999/exchange/internal/repository"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
 
-// matching-engine: standalone matching service process
-// Consumes: exchange.orders (group: matching-engine)
-// Publishes: exchange.settlements, exchange.trades, exchange.orderbook
-// No API routes (health check only), No WebSocket, No DB writes during runtime
+// matching-engine: 獨立的記憶體撮合引擎服務
+// 消費 Kafka：exchange.orders（group: matching-engine）
+// 發布 Kafka：exchange.settlements, exchange.trades, exchange.orderbook
+// 無對外 API（僅 health check），無 WebSocket，執行期間無 DB 寫入
 func main() {
 	defer logger.Sync()
 
-	// 1. Database connection (read-only at startup: RestoreEngineSnapshot only)
+	// 1. 資料庫連線（唯讀，僅用於啟動時 RestoreEngineSnapshot）
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
-		dbURL = "postgres://user:password@localhost:5432/exchange?sslmode=disable"
+		logger.Log.Fatal("matching-engine: DATABASE_URL 環境變數未設定")
 	}
 	pool, err := pgxpool.New(context.Background(), dbURL)
 	if err != nil {
-		logger.Log.Fatal("matching-engine: cannot connect to DB", zap.Error(err))
+		logger.Log.Fatal("matching-engine: 無法連接資料庫", zap.Error(err))
 	}
 	defer pool.Close()
 
-	// 2. Repository (orderRepo used by RestoreEngineSnapshot; others not called by matching-engine)
+	// 2. Repository（僅供 RestoreEngineSnapshot 使用）
 	repo := repository.NewPostgresRepository(pool)
 
-	// 3. Redis (orderbook cache updates)
+	// 3. Redis（掛單簿快取更新）
 	redisCfg := redis.DefaultConfig()
 	if redisAddr := os.Getenv("REDIS_URL"); redisAddr != "" {
 		redisCfg.Addr = redisAddr
 	}
 	redisClient, err := redis.NewClient(redisCfg)
 	if err != nil {
-		logger.Log.Warn("matching-engine: Redis unavailable, orderbook cache disabled", zap.Error(err))
+		logger.Log.Warn("matching-engine: Redis 不可用，掛單簿快取已停用", zap.Error(err))
 	}
-	var cacheRepo core.CacheRepository
+	var cacheRepo domain.CacheRepository
 	if redisClient != nil {
 		cacheRepo = repository.NewRedisCacheRepository(redisClient)
-		logger.Log.Info("Redis connected (orderbook cache)")
+		logger.Log.Info("Redis 已連線（掛單簿快取）")
 	}
 
-	// 4. Kafka Producer (publish settlements / trades / orderbook events)
+	// 4. Kafka Producer（發布 settlements / trades / orderbook 事件）
 	kafkaCfg := kafka.DefaultConfig()
 	if brokers := os.Getenv("KAFKA_BROKERS"); brokers != "" {
 		kafkaCfg.Brokers = strings.Split(brokers, ",")
@@ -69,66 +71,57 @@ func main() {
 
 	producer, err := kafka.NewProducer(kafkaCfg)
 	if err != nil {
-		logger.Log.Fatal("matching-engine: Kafka producer failed", zap.Error(err))
+		logger.Log.Fatal("matching-engine: Kafka Producer 連線失敗", zap.Error(err))
 	}
 	defer producer.Close()
-	logger.Log.Info("Kafka producer connected")
+	logger.Log.Info("Kafka Producer 已連線")
 
-	// 5. ExchangeService
-	//    tradeListener = nil: OnOrderBookUpdate publishes to exchange.orderbook (not in-process WS)
-	svc := core.NewExchangeService(
-		repo, repo, repo, repo, repo,
-		"BTC-USD",
-		nil,
-		cacheRepo,
-		producer,
-		nil, // outboxRepo: matching-engine 不會直接接收訂單，無需 Outbox
-	)
+	// 5. Service
+	engineManager := engine.NewEngineManager()
+	svc := matching.NewService(engineManager, producer, cacheRepo)
 
-	// 6. Restore engine snapshot (must complete before consumer starts)
-	logger.Log.Info("Restoring engine snapshot from DB...")
-	if err := svc.RestoreEngineSnapshot(context.Background()); err != nil {
-		logger.Log.Error("RestoreEngineSnapshot failed", zap.Error(err))
+	// 6. 冷啟動：從 DB 還原活動訂單至記憶體引擎
+	logger.Log.Info("正在從 DB 還原撮合引擎快照...")
+	if err := matching.RestoreEngineSnapshot(context.Background(), repo, engineManager); err != nil {
+		logger.Log.Error("RestoreEngineSnapshot 失敗", zap.Error(err))
 	}
-	logger.Log.Info("Engine snapshot restored")
+	logger.Log.Info("撮合引擎快照還原完成")
 
-	// 6a. Create required Kafka topics before publishing (避免 UNKNOWN_TOPIC_OR_PARTITION)
+	// 6a. 預先建立 Kafka Topics（避免 UNKNOWN_TOPIC_OR_PARTITION）
 	topicCtx, topicCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer topicCancel()
 	if err := producer.CreateTopics(topicCtx, []string{
-		core.TopicOrders,
-		core.TopicSettlements,
-		core.TopicTrades,
-		core.TopicOrderBook,
-		core.TopicOrderUpdates,
+		domain.TopicOrders,
+		domain.TopicSettlements,
+		domain.TopicTrades,
+		domain.TopicOrderBook,
+		domain.TopicOrderUpdates,
 	}); err != nil {
 		logger.Log.Warn("CreateTopics 失敗（主題可能已存在）", zap.Error(err))
 	} else {
-		logger.Log.Info("Kafka topics initialized")
+		logger.Log.Info("Kafka topics 已初始化")
 	}
 
-	// 6b. Warm up Redis orderbook cache from in-memory engine snapshot
-	// 讓 order-service 啟動後能立即讀取 Redis 快取估算市價單所需資金
 	if cacheRepo != nil {
-		if _, err := svc.GetOrderBook(context.Background(), "BTC-USD"); err != nil {
-			logger.Log.Warn("Redis orderbook cache warmup failed", zap.Error(err))
+		if _, err := cacheRepo.GetOrderBookSnapshot(context.Background(), "BTC-USD"); err != nil {
+			logger.Log.Warn("Redis 掛單簿快取預熱失敗", zap.Error(err))
 		} else {
-			logger.Log.Info("Redis orderbook cache warmed up")
+			logger.Log.Info("Redis 掛單簿快取預熱完成")
 		}
 	}
 
-	// 7. Start Kafka consumer (exchange.orders)
+	// 7. 啟動 Kafka Consumer（exchange.orders）
 	consumerCtx, cancelConsumers := context.WithCancel(context.Background())
 	defer cancelConsumers()
 
-	matchConsumer, err := kafka.NewConsumer(kafkaCfg, "matching-engine", []string{core.TopicOrders})
+	matchConsumer, err := kafka.NewConsumer(kafkaCfg, "matching-engine", []string{domain.TopicOrders})
 	if err != nil {
-		logger.Log.Fatal("Failed to create matching consumer", zap.Error(err))
+		logger.Log.Fatal("matching-engine: 建立 matching consumer 失敗", zap.Error(err))
 	}
-	matchConsumer.Start(consumerCtx, svc.HandleMatchingEvent)
-	logger.Log.Info("Kafka matching consumer started", zap.String("topic", core.TopicOrders))
+	matchConsumer.Start(consumerCtx, svc.HandleEvents)
+	logger.Log.Info("Kafka matching consumer 已啟動", zap.String("topic", domain.TopicOrders))
 
-	// 8. Health check HTTP endpoint (ECS ALB / Docker probe)
+	// 8. Health check + metrics 端點（供 ECS ALB / Docker probe）
 	r := gin.New()
 	r.Use(metrics.Middleware("matching-engine"))
 	r.GET("/metrics", gin.WrapH(metrics.Handler()))
@@ -137,22 +130,22 @@ func main() {
 	})
 	port := os.Getenv("MATCHING_ENGINE_PORT")
 	if port == "" {
-		port = "8081"
+		port = "8101"
 	}
 
 	srv := &http.Server{Addr: ":" + port, Handler: r}
 	go func() {
-		logger.Log.Info("Health check server started on :" + port)
+		logger.Log.Info("Health check server 已啟動", zap.String("port", ":"+port))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Log.Error("Health check server error", zap.Error(err))
+			logger.Log.Error("Health check server 發生錯誤", zap.Error(err))
 		}
 	}()
 
-	// 9. Graceful shutdown
+	// 9. 優雅關機
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-quit
-	logger.Log.Info("Shutdown signal received", zap.String("signal", sig.String()))
+	logger.Log.Info("收到關閉訊號", zap.String("signal", sig.String()))
 
 	cancelConsumers()
 	matchConsumer.Wait()
@@ -160,7 +153,7 @@ func main() {
 	ctxShutdown, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelShutdown()
 	if err := srv.Shutdown(ctxShutdown); err != nil {
-		logger.Log.Error("Health check server shutdown error", zap.Error(err))
+		logger.Log.Error("Health check server 關閉失敗", zap.Error(err))
 	}
-	logger.Log.Info("matching-engine shutdown complete")
+	logger.Log.Info("matching-engine 優雅關機完成")
 }

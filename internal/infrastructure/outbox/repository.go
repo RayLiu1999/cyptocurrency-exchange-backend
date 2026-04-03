@@ -76,13 +76,12 @@ func (r *Repository) FetchPending(ctx context.Context, batchSize int) ([]*Messag
 	return msgs, rows.Err()
 }
 
-// MarkPublished 將已成功 Produce 到 Kafka 的訊息標記為 Published
+// MarkPublished 將已成功 Produce 到 Kafka 的訊息進行物理刪除
 func (r *Repository) MarkPublished(ctx context.Context, id uuid.UUID) error {
 	_, err := r.pool.Exec(ctx, `
-		UPDATE outbox_messages
-		SET status = $1, published_at = $2
-		WHERE id = $3`,
-		StatusPublished, time.Now().UnixMilli(), id,
+		DELETE FROM outbox_messages
+		WHERE id = $1`,
+		id,
 	)
 	return err
 }

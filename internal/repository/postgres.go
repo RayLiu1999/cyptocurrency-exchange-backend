@@ -3,7 +3,9 @@ package repository
 import (
 	"context"
 
-	"github.com/RayLiu1999/exchange/internal/core"
+"github.com/RayLiu1999/exchange/internal/order"
+"github.com/RayLiu1999/exchange/internal/marketdata"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,11 +20,12 @@ func NewPostgresRepository(db *pgxpool.Pool) *PostgresRepository {
 }
 
 // Ensure PostgresRepository implements the interfaces
-var _ core.OrderRepository = (*PostgresRepository)(nil)
-var _ core.AccountRepository = (*PostgresRepository)(nil)
-var _ core.UserRepository = (*PostgresRepository)(nil)
-var _ core.TradeRepository = (*PostgresRepository)(nil)
-var _ core.DBTransaction = (*PostgresRepository)(nil)
+var _ order.OrderRepository = (*PostgresRepository)(nil)
+var _ order.AccountRepository = (*PostgresRepository)(nil)
+var _ order.UserRepository = (*PostgresRepository)(nil)
+var _ order.TradeRepository = (*PostgresRepository)(nil)
+var _ marketdata.TradeRepository = (*PostgresRepository)(nil)
+var _ order.DBTransaction = (*PostgresRepository)(nil)
 
 type txKeyType struct{}
 

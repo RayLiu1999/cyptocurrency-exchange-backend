@@ -10,13 +10,14 @@ import (
 	"time"
 
 	"github.com/RayLiu1999/exchange/internal/api"
-	"github.com/RayLiu1999/exchange/internal/core"
+	"github.com/RayLiu1999/exchange/internal/domain"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/kafka"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/outbox"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/redis"
+	"github.com/RayLiu1999/exchange/internal/order"
 	"github.com/RayLiu1999/exchange/internal/repository"
-	"github.com/RayLiu1999/exchange/internal/simulator"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,35 +26,23 @@ import (
 	"go.uber.org/zap"
 )
 
-// order-service: standalone order management service
-// Consumes: exchange.settlements (TX2 DB writes)
-// Publishes: exchange.orders (after TX1 fund lock)
-// Hosts: HTTP API
+// order-service: 微服務模式下的訂單管理服務
+// 職責：接收 HTTP 下單請求，執行 TX1（鎖定資金 + 建立訂單 + 寫入 Outbox）
+// 消費 Kafka：exchange.settlements（TX2 結算寫入 DB）
+// 發布 Kafka：由 Outbox Worker 異步從 outbox_messages 讀取並發布 exchange.orders
 func main() {
 	defer logger.Sync()
 
-	// 1. Database connection
+	// 1. 資料庫連線（純微服務模式下，Kafka 是必要依賴）
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
-		dbURL = "postgres://user:password@localhost:5432/exchange?sslmode=disable"
+		logger.Log.Fatal("order-service: DATABASE_URL 環境變數未設定")
 	}
 	pool, err := pgxpool.New(context.Background(), dbURL)
 	if err != nil {
-		logger.Log.Fatal("order-service: cannot connect to DB", zap.Error(err))
+		logger.Log.Fatal("order-service: 無法連接資料庫", zap.Error(err))
 	}
 	defer pool.Close()
-
-	// Auto-run migrations (order-service owns schema init as HTTP entry point)
-	logger.Log.Info("Running DB migrations...")
-	schemaBytes, err := os.ReadFile("sql/schema.sql")
-	if err != nil {
-		logger.Log.Warn("sql/schema.sql not found, skipping migration", zap.Error(err))
-	} else {
-		if _, err := pool.Exec(context.Background(), string(schemaBytes)); err != nil {
-			logger.Log.Fatal("DB migration failed", zap.Error(err))
-		}
-		logger.Log.Info("DB migration complete")
-	}
 
 	// 2. Repository
 	repo := repository.NewPostgresRepository(pool)
@@ -65,78 +54,57 @@ func main() {
 	}
 	redisClient, err := redis.NewClient(redisCfg)
 	if err != nil {
-		logger.Log.Warn("Redis unavailable, falling back to memory mode", zap.Error(err))
+		logger.Log.Warn("Redis 不可用，市價單預估功能將受限", zap.Error(err))
 	}
-	var cacheRepo core.CacheRepository
+	var cacheRepo domain.CacheRepository
 	if redisClient != nil {
 		cacheRepo = repository.NewRedisCacheRepository(redisClient)
-		logger.Log.Info("Redis connected")
+		logger.Log.Info("Redis 已連線")
 	}
 
-	// 2.2 Kafka Producer (publish exchange.orders after TX1)
+	// 2.2 Kafka Producer（純微服務模式：Kafka 連線失敗直接 Fatal，不降級）
 	kafkaCfg := kafka.DefaultConfig()
 	if brokers := os.Getenv("KAFKA_BROKERS"); brokers != "" {
 		kafkaCfg.Brokers = strings.Split(brokers, ",")
 	}
-	if os.Getenv("KAFKA_ALLOW_AUTO_CREATE") == "false" {
-		kafkaCfg.AllowAutoTopicCreation = false
-	} else if os.Getenv("KAFKA_ALLOW_AUTO_CREATE") == "true" {
-		kafkaCfg.AllowAutoTopicCreation = true
-	} else if os.Getenv("GIN_MODE") == "release" {
+	if os.Getenv("GIN_MODE") == "release" {
 		kafkaCfg.AllowAutoTopicCreation = false
 	}
 
-	var eventBus core.EventPublisher
-	var kafkaProducer *kafka.Producer
-	if producer, perr := kafka.NewProducer(kafkaCfg); perr != nil {
-		logger.Log.Warn("Kafka unavailable, falling back to sync matching mode", zap.Error(perr))
-	} else {
-		kafkaProducer = producer
-		eventBus = producer
-		logger.Log.Info("Kafka producer connected")
+	kafkaProducer, err := kafka.NewProducer(kafkaCfg)
+	if err != nil {
+		logger.Log.Fatal("order-service: Kafka 連線失敗，純微服務模式無法啟動", zap.Error(err))
 	}
+	eventBus := domain.EventPublisher(kafkaProducer)
+	logger.Log.Info("Kafka Producer 已連線")
 
-	// 3. ExchangeService
-	//    tradeListener = nil: WebSocket 已拆至 market-data-service
-	//    eventBus = kafkaProducer: PlaceOrder / OrderUpdated publish to Kafka (async path)
-	svc := core.NewExchangeService(
+	// 2.3 Outbox Worker（保證 Outbox → Kafka 的可靠傳遞）
+	outboxCtx, cancelOutbox := context.WithCancel(context.Background())
+	outboxRepo := outbox.NewRepository(pool)
+	worker := outbox.NewWorker(outboxRepo, kafkaProducer, 10*time.Second, 100)
+	go worker.Start(outboxCtx)
+
+	// 3. ExchangeService（純微服務模式：tradeListener = nil，WebSocket 推播由 market-data-service 負責）
+	svc := order.NewService(
 		repo, repo, repo, repo, repo,
-		"BTC-USD",
-		nil,
 		cacheRepo,
 		eventBus,
-		nil, // outboxRepo: 將在此單獨啟動 Outbox Worker
+		outboxRepo,
 	)
 
-	// Only restore engine snapshot in fallback (no-Kafka) mode.
-	// Normal microservice mode: PlaceOrder publishes to Kafka; matching-engine owns the in-memory engine.
-	if eventBus == nil {
-		logger.Log.Info("No Kafka - falling back to sync matching, restoring engine snapshot...")
-		if err := svc.RestoreEngineSnapshot(context.Background()); err != nil {
-			logger.Log.Error("RestoreEngineSnapshot failed", zap.Error(err))
-		}
-	}
-
-	// 5. Start Kafka consumers
+	// 4. 啟動 Kafka Consumers
 	consumerCtx, cancelConsumers := context.WithCancel(context.Background())
 	var settleConsumer *kafka.Consumer
 
-	if eventBus != nil {
-		// 5.1 Settlement consumer (exchange.settlements -> TX2 DB writes)
-		var serr error
-		settleConsumer, serr = kafka.NewConsumer(kafkaCfg, "settlement-engine", []string{core.TopicSettlements})
-		if serr != nil {
-			logger.Log.Error("Failed to create settlement consumer", zap.Error(serr))
-		} else {
-			settleConsumer.Start(consumerCtx, svc.HandleSettlementEvent)
-			logger.Log.Info("Settlement consumer started", zap.String("topic", core.TopicSettlements))
-		}
+	// 4.1 Settlement consumer（exchange.settlements → TX2 結算寫入 DB）
+	settleConsumer, err = kafka.NewConsumer(kafkaCfg, "settlement-engine", []string{domain.TopicSettlements})
+	if err != nil {
+		logger.Log.Fatal("order-service: 建立 settlement consumer 失敗", zap.Error(err))
 	}
+	settleConsumer.Start(consumerCtx, svc.HandleEvents)
+	logger.Log.Info("Settlement consumer 已啟動", zap.String("topic", domain.TopicSettlements))
 
-	// 6. Simulator
-	sim := simulator.NewService(svc)
-
-	// 7. HTTP routes
+	// 5. HTTP 路由（僅供 Gateway 反向代理，安全 Middleware 已在 Gateway 層完成）
 	r := gin.Default()
 	r.Use(metrics.Middleware("order-service"))
 	r.GET("/metrics", gin.WrapH(metrics.Handler()))
@@ -148,7 +116,7 @@ func main() {
 		MaxAge:           12 * time.Hour,
 	}))
 
-	handler := api.NewHandler(svc, sim)
+	handler := api.NewHandler(svc, nil)
 	v1 := r.Group("/api/v1")
 	handler.RegisterRoutes(v1)
 
@@ -159,27 +127,28 @@ func main() {
 	url := ginSwagger.URL("http://localhost:8080/docs/swagger.yaml")
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, url))
 
-	// 8. Start HTTP server
+	// 6. 啟動 HTTP 伺服器
 	port := os.Getenv("ORDER_SERVICE_PORT")
 	if port == "" {
-		port = "8080"
+		port = "8103"
 	}
 
 	srv := &http.Server{Addr: ":" + port, Handler: r}
 	go func() {
-		logger.Info("order-service started", zap.String("port", ":"+port))
+		logger.Info("order-service 已啟動", zap.String("port", ":"+port))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("listen", zap.Error(err))
+			logger.Error("order-service 啟動失敗", zap.Error(err))
 		}
 	}()
 
-	// 9. Graceful shutdown
+	// 7. 優雅關機
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	logger.Info("order-service shutdown signal received")
+	logger.Info("order-service 收到關閉訊號")
 
 	cancelConsumers()
+	cancelOutbox()
 	shutdownDone := make(chan struct{})
 	go func() {
 		if settleConsumer != nil {
@@ -189,9 +158,9 @@ func main() {
 	}()
 	select {
 	case <-shutdownDone:
-		logger.Info("Kafka consumers closed")
+		logger.Info("Kafka consumers 已完整關閉")
 	case <-time.After(10 * time.Second):
-		logger.Warn("Kafka consumer close timeout, forcing shutdown")
+		logger.Warn("Kafka consumer 等待超時，強制繼續關機")
 	}
 
 	if kafkaProducer != nil {
@@ -201,7 +170,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
-		logger.Error("order-service forced shutdown", zap.Error(err))
+		logger.Error("order-service 強制關閉", zap.Error(err))
 	}
-	logger.Info("order-service shutdown complete")
+	logger.Info("order-service 優雅關機完成")
 }

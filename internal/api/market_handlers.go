@@ -11,7 +11,7 @@ import (
 func (h *Handler) GetOrderBook(c *gin.Context) {
 	symbol := c.DefaultQuery("symbol", "BTC-USD")
 
-	orderBook, err := h.svc.GetOrderBook(c.Request.Context(), symbol)
+	orderBook, err := h.querySvc.GetOrderBook(c.Request.Context(), symbol)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -29,7 +29,7 @@ func (h *Handler) GetKLines(c *gin.Context) {
 	limit := 100
 	fmt.Sscanf(limitStr, "%d", &limit)
 
-	klines, err := h.svc.GetKLines(c.Request.Context(), symbol, interval, limit)
+	klines, err := h.querySvc.GetKLines(c.Request.Context(), symbol, interval, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -46,7 +46,7 @@ func (h *Handler) GetRecentTrades(c *gin.Context) {
 	limit := 50
 	fmt.Sscanf(limitStr, "%d", &limit)
 
-	trades, err := h.svc.GetRecentTrades(c.Request.Context(), symbol, limit)
+	trades, err := h.querySvc.GetRecentTrades(c.Request.Context(), symbol, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

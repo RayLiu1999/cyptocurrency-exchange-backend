@@ -4,19 +4,19 @@ import (
 	"context"
 	"time"
 
-	"github.com/RayLiu1999/exchange/internal/core"
+	"github.com/RayLiu1999/exchange/internal/domain"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
 
 // --- AccountRepository Implementation ---
 
-func (r *PostgresRepository) GetAccount(ctx context.Context, userID uuid.UUID, currency string) (*core.Account, error) {
+func (r *PostgresRepository) GetAccount(ctx context.Context, userID uuid.UUID, currency string) (*domain.Account, error) {
 	executor := r.getExecutor(ctx)
 	query := `SELECT user_id, currency, balance, locked, updated_at FROM accounts WHERE user_id = $1 AND currency = $2`
 
 	row := executor.QueryRow(ctx, query, userID, currency)
-	var acc core.Account
+	var acc domain.Account
 	err := row.Scan(&acc.UserID, &acc.Currency, &acc.Balance, &acc.Locked, &acc.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -24,7 +24,7 @@ func (r *PostgresRepository) GetAccount(ctx context.Context, userID uuid.UUID, c
 	return &acc, nil
 }
 
-func (r *PostgresRepository) CreateAccount(ctx context.Context, account *core.Account) error {
+func (r *PostgresRepository) CreateAccount(ctx context.Context, account *domain.Account) error {
 	executor := r.getExecutor(ctx)
 	query := `
 		INSERT INTO accounts (id, user_id, currency, balance, locked, created_at, updated_at)
@@ -60,7 +60,7 @@ func (r *PostgresRepository) LockFunds(ctx context.Context, userID uuid.UUID, cu
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return core.ErrInsufficientFunds
+		return domain.ErrInsufficientFunds
 	}
 	return nil
 }
@@ -76,7 +76,7 @@ func (r *PostgresRepository) UnlockFunds(ctx context.Context, userID uuid.UUID, 
 	return err
 }
 
-func (r *PostgresRepository) GetAccountsByUser(ctx context.Context, userID uuid.UUID) ([]*core.Account, error) {
+func (r *PostgresRepository) GetAccountsByUser(ctx context.Context, userID uuid.UUID) ([]*domain.Account, error) {
 	executor := r.getExecutor(ctx)
 	query := `SELECT id, user_id, currency, balance, locked, created_at, updated_at FROM accounts WHERE user_id = $1`
 
@@ -86,9 +86,9 @@ func (r *PostgresRepository) GetAccountsByUser(ctx context.Context, userID uuid.
 	}
 	defer rows.Close()
 
-	var accounts []*core.Account
+	var accounts []*domain.Account
 	for rows.Next() {
-		var acc core.Account
+		var acc domain.Account
 		if err := rows.Scan(&acc.ID, &acc.UserID, &acc.Currency, &acc.Balance, &acc.Locked, &acc.CreatedAt, &acc.UpdatedAt); err != nil {
 			return nil, err
 		}

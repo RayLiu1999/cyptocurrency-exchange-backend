@@ -25,16 +25,20 @@ func main() {
 
 	port := os.Getenv("GATEWAY_PORT")
 	if port == "" {
-		port = "8082"
+		port = "8100"
 	}
 
 	orderServiceURL := os.Getenv("ORDER_SERVICE_URL")
 	if orderServiceURL == "" {
-		orderServiceURL = "http://localhost:8080"
+		orderServiceURL = "http://localhost:8103"
 	}
 	marketDataURL := os.Getenv("MARKET_DATA_SERVICE_URL")
 	if marketDataURL == "" {
-		marketDataURL = "http://localhost:8083"
+		marketDataURL = "http://localhost:8102"
+	}
+	simulationServiceURL := os.Getenv("SIMULATION_SERVICE_URL")
+	if simulationServiceURL == "" {
+		simulationServiceURL = "http://localhost:8104"
 	}
 
 	orderTargetURL, err := url.Parse(orderServiceURL)
@@ -44,6 +48,10 @@ func main() {
 	marketTargetURL, err := url.Parse(marketDataURL)
 	if err != nil {
 		logger.Log.Fatal("gateway: MARKET_DATA_SERVICE_URL 格式錯誤", zap.String("url", marketDataURL), zap.Error(err))
+	}
+	simulationTargetURL, err := url.Parse(simulationServiceURL)
+	if err != nil {
+		logger.Log.Fatal("gateway: SIMULATION_SERVICE_URL 格式錯誤", zap.String("url", simulationServiceURL), zap.Error(err))
 	}
 
 	redisCfg := infraredis.DefaultConfig()
@@ -71,6 +79,7 @@ func main() {
 
 	orderProxy := newReverseProxy(orderTargetURL)
 	marketProxy := newReverseProxy(marketTargetURL)
+	simulationProxy := newReverseProxy(simulationTargetURL)
 
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -92,9 +101,9 @@ func main() {
 	{
 		public := apiGroup.Group("/")
 		public.Use(middleware.RateLimitMiddleware(publicLimiter))
-		public.GET("/orderbook", gin.WrapH(orderProxy))
-		public.GET("/klines", gin.WrapH(orderProxy))
-		public.GET("/trades", gin.WrapH(orderProxy))
+		public.GET("/orderbook", gin.WrapH(marketProxy))
+		public.GET("/klines", gin.WrapH(marketProxy))
+		public.GET("/trades", gin.WrapH(marketProxy))
 
 		private := apiGroup.Group("/")
 		private.Use(middleware.RateLimitMiddleware(privateLimiter))
@@ -102,16 +111,19 @@ func main() {
 		private.GET("/orders/:id", gin.WrapH(orderProxy))
 		private.DELETE("/orders/:id", gin.WrapH(orderProxy))
 		private.GET("/accounts", gin.WrapH(orderProxy))
-		private.POST("/simulation/start", gin.WrapH(orderProxy))
-		private.POST("/simulation/stop", gin.WrapH(orderProxy))
-		private.GET("/simulation/status", gin.WrapH(orderProxy))
-		private.DELETE("/simulation/data", gin.WrapH(orderProxy))
 		private.POST("/test/join", gin.WrapH(orderProxy))
+		private.POST("/test/recharge/:user_id", gin.WrapH(orderProxy))
 
 		orders := apiGroup.Group("/")
 		orders.Use(middleware.RateLimitMiddleware(privateLimiter))
 		orders.Use(middleware.IdempotencyMiddleware(idempStore, 24*time.Hour))
 		orders.POST("/orders", gin.WrapH(orderProxy))
+
+		// 模擬器控制 API（轉發至 simulation-service，無需冪等性保護）
+		simulation := apiGroup.Group("/")
+		simulation.POST("/simulation/start", gin.WrapH(simulationProxy))
+		simulation.POST("/simulation/stop", gin.WrapH(simulationProxy))
+		simulation.GET("/simulation/status", gin.WrapH(simulationProxy))
 	}
 	r.NoRoute(gin.WrapH(orderProxy))
 
@@ -122,7 +134,12 @@ func main() {
 	}
 
 	go func() {
-		logger.Log.Info("gateway 啟動完成", zap.String("port", port), zap.String("order_upstream", orderTargetURL.String()), zap.String("market_upstream", marketTargetURL.String()))
+		logger.Log.Info("gateway 啟動完成",
+			zap.String("port", port),
+			zap.String("order_upstream", orderTargetURL.String()),
+			zap.String("market_upstream", marketTargetURL.String()),
+			zap.String("simulation_upstream", simulationTargetURL.String()),
+		)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Log.Fatal("gateway 啟動失敗", zap.Error(err))
 		}

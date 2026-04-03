@@ -15,6 +15,15 @@ jobs:
   test:
     name: Go Test
     runs-on: ubuntu-latest
+    env:
+      DB_USER: postgres
+      DB_PASSWORD: 123qwe
+      DB_NAME: exchange
+      DB_CONTAINER: exchange-postgres
+      REDIS_PASSWORD: 123qwe
+      DATABASE_URL: postgres://postgres:123qwe@localhost:5432/exchange?sslmode=disable
+      REDIS_URL: redis://:123qwe@localhost:6379/0
+      KAFKA_BROKERS: localhost:9092
 
     steps:
       - name: Checkout
@@ -32,5 +41,15 @@ jobs:
       - name: Build services
         run: make build
 
-      - name: Run unit tests
-        run: go test -v ./...
+      - name: Start infrastructure
+        run: make infra-up
+
+      - name: Database migration
+        run: make db-migrate
+
+      - name: Run all tests (Unit, Integration, Race)
+        run: make test-all
+
+      - name: Stop infrastructure
+        if: always()
+        run: make infra-down
