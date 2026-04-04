@@ -29,20 +29,14 @@
     produces:
       - application/json
     responses:
-      "202":
-        description: Accepted
+      "200":
+        description: OK
         schema:
           additionalProperties:
             type: string
           type: object
-      "400":
-        description: Bad Request
-        schema:
-          additionalProperties:
-            type: string
-          type: object
-      "503":
-        description: Service Unavailable
+      "409":
+        description: Conflict
         schema:
           additionalProperties:
             type: string
@@ -68,12 +62,6 @@
           additionalProperties:
             type: string
           type: object
-      "503":
-        description: Service Unavailable
-        schema:
-          additionalProperties:
-            type: string
-          type: object
     summary: 停止模擬交易 (Stop Simulation)
     tags:
       - Simulation
@@ -87,33 +75,6 @@
         description: OK
         schema:
           $ref: "../definitions.yaml#/api.simulationStatus"
-      "503":
-        description: Service Unavailable
-        schema:
-          additionalProperties:
-            type: string
-          type: object
     summary: 取得模擬狀態 (Get Simulation Status)
-    tags:
-      - Simulation
-/api/v1/simulation/data:
-  delete:
-    description: 清除交易資料 (訂單與成交)
-    produces:
-      - application/json
-    responses:
-      "200":
-        description: OK
-        schema:
-          additionalProperties:
-            type: string
-          type: object
-      "500":
-        description: Internal Server Error
-    schema:
-      additionalProperties:
-        type: string
-      type: object
-    summary: 清除交易資料 (Clear Simulation Data)
     tags:
       - Simulation

@@ -1,5 +1,4 @@
 basePath: /
-host: localhost:8080
 info:
   contact: {}
   description: High-performance cryptocurrency exchange API with matching engine.
@@ -24,8 +23,6 @@ paths:
     $ref: "./paths/simulation.yaml#/api/v1/simulation/stop"
   /api/v1/simulation/status:
     $ref: "./paths/simulation.yaml#/api/v1/simulation/status"
-  /api/v1/simulation/data:
-    $ref: "./paths/simulation.yaml#/api/v1/simulation/data"
   /api/v1/accounts:
     $ref: "./paths/accounts.yaml#/api/v1/accounts"
   /ws:

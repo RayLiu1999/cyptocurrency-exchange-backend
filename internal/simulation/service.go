@@ -354,8 +354,14 @@ func (s *Service) placeOrder(ctx context.Context, req placeOrderRequest) error {
 		_ = json.NewDecoder(resp.Body).Decode(&errBody)
 		return fmt.Errorf("下單請求無效: %s", errBody.Error)
 	}
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("下單失敗，HTTP %d", resp.StatusCode)
+	
+	// API 在非同步模式下會回傳 202 Accepted
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		var errBody struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&errBody)
+		return fmt.Errorf("下單失敗，HTTP %d: %s", resp.StatusCode, errBody.Error)
 	}
 	return nil
 }
