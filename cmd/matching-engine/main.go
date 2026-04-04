@@ -63,6 +63,9 @@ func main() {
 	if brokers := os.Getenv("KAFKA_BROKERS"); brokers != "" {
 		kafkaCfg.Brokers = strings.Split(brokers, ",")
 	}
+	if resetOffset := os.Getenv("KAFKA_RESET_OFFSET"); resetOffset != "" {
+		kafkaCfg.ResetOffset = strings.ToLower(resetOffset)
+	}
 	if os.Getenv("KAFKA_ALLOW_AUTO_CREATE") == "false" {
 		kafkaCfg.AllowAutoTopicCreation = false
 	} else if os.Getenv("KAFKA_ALLOW_AUTO_CREATE") == "true" {
@@ -78,7 +81,7 @@ func main() {
 
 	// 5. Service
 	engineManager := engine.NewEngineManager()
-	svc := matching.NewService(engineManager, producer, cacheRepo)
+	svc := matching.NewSubscriber(engineManager, producer, cacheRepo)
 
 	// 6. 冷啟動：從 DB 還原活動訂單至記憶體引擎
 	logger.Log.Info("正在從 DB 還原撮合引擎快照...")
@@ -102,12 +105,13 @@ func main() {
 		logger.Log.Info("Kafka topics 已初始化")
 	}
 
-	if cacheRepo != nil {
-		if _, err := cacheRepo.GetOrderBookSnapshot(context.Background(), "BTC-USD"); err != nil {
-			logger.Log.Warn("Redis 掛單簿快取預熱失敗", zap.Error(err))
-		} else {
-			logger.Log.Info("Redis 掛單簿快取預熱完成")
-		}
+	restoredSymbols := svc.SyncRecoveredOrderBooks(20)
+	if len(restoredSymbols) == 0 {
+		logger.Log.Info("冷啟動後沒有需要同步的掛單簿快照")
+	} else {
+		logger.Log.Info("冷啟動掛單簿快照已同步至 Redis 與市場資料流",
+			zap.Strings("symbols", restoredSymbols),
+		)
 	}
 
 	// 7. 啟動 Kafka Consumer（exchange.orders）

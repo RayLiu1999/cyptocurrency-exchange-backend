@@ -7,23 +7,26 @@ import (
 	"time"
 
 	"github.com/RayLiu1999/exchange/internal/domain"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/outbox"
 	"github.com/RayLiu1999/exchange/internal/matching/engine"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
+	"go.uber.org/zap"
 )
 
 // Service 實作 OrderService，處理訂單生命週期與資金凍結
 type Service struct {
-	orderRepo   OrderRepository
-	accountRepo AccountRepository
-	userRepo    UserRepository
-	tradeRepo   TradeRepository
-	txManager   DBTransaction
-	cacheRepo   domain.CacheRepository
-	eventBus    domain.EventPublisher
-	outboxRepo  *outbox.Repository
+	orderRepo    OrderRepository
+	accountRepo  AccountRepository
+	userRepo     UserRepository
+	tradeRepo    TradeRepository
+	txManager    DBTransaction
+	cacheRepo    domain.CacheRepository
+	eventBus     domain.EventPublisher
+	rawPublisher outbox.Publisher // 熱路徑直發 Kafka 用（與 Outbox Worker 共用 Kafka Producer）
+	outboxRepo   *outbox.Repository
 }
 
 func NewService(
@@ -34,17 +37,19 @@ func NewService(
 	txManager DBTransaction,
 	cacheRepo domain.CacheRepository,
 	eventBus domain.EventPublisher,
+	rawPublisher outbox.Publisher,
 	outboxRepo *outbox.Repository,
 ) *Service {
 	return &Service{
-		orderRepo:   orderRepo,
-		accountRepo: accountRepo,
-		userRepo:    userRepo,
-		tradeRepo:   tradeRepo,
-		txManager:   txManager,
-		cacheRepo:   cacheRepo,
-		eventBus:    eventBus,
-		outboxRepo:  outboxRepo,
+		orderRepo:    orderRepo,
+		accountRepo:  accountRepo,
+		userRepo:     userRepo,
+		tradeRepo:    tradeRepo,
+		txManager:    txManager,
+		cacheRepo:    cacheRepo,
+		eventBus:     eventBus,
+		rawPublisher: rawPublisher,
+		outboxRepo:   outboxRepo,
 	}
 }
 
@@ -81,7 +86,8 @@ func (s *Service) PlaceOrder(ctx context.Context, order *domain.Order) (err erro
 	order.CreatedAt = now
 	order.UpdatedAt = now
 
-	// === 第一事務: 鎖定資金 + 建立訂單 + Outbox ===
+	// === 第一事務: 鎖定資金 + 建立訂單 + Outbox (冷路徑保底) ===
+	var outboxMsg *outbox.Message
 	err = s.txManager.ExecTx(ctx, func(ctx context.Context) error {
 		if err := s.accountRepo.LockFunds(ctx, order.UserID, currencyToLock, amountToLock); err != nil {
 			return fmt.Errorf("餘額不足: %w", err)
@@ -112,21 +118,52 @@ func (s *Service) PlaceOrder(ctx context.Context, order *domain.Order) (err erro
 			if marshalErr != nil {
 				return fmt.Errorf("序列化 OrderPlacedEvent 失敗: %w", marshalErr)
 			}
-			if insertErr := s.outboxRepo.Insert(ctx, &outbox.Message{
+			outboxMsg = &outbox.Message{
 				AggregateID:   order.ID.String(),
 				AggregateType: "order_placed",
 				Topic:         domain.TopicOrders,
 				PartitionKey:  order.Symbol,
 				Payload:       payload,
-			}); insertErr != nil {
+			}
+			if insertErr := s.outboxRepo.Insert(ctx, outboxMsg); insertErr != nil {
 				return fmt.Errorf("寫入 Outbox 訊息失敗: %w", insertErr)
 			}
 		}
 
 		return nil
 	})
+	if err != nil {
+		return err
+	}
 
-	return err
+	// === 熱路徑：DB Commit 成功後立刻嘗試直發 Kafka ===
+	// 目的：將 99% 的正常情況延遲降至毫秒級，維持高 TPS
+	// 失敗不影響回傳：Worker 輪詢（冷路徑）會在下一個 tick 補發
+	if outboxMsg != nil && s.rawPublisher != nil {
+		go func(msgID uuid.UUID, msgPayload []byte, topic, partitionKey string) {
+			hotCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if pubErr := s.rawPublisher.PublishRaw(hotCtx, topic, partitionKey, msgPayload); pubErr != nil {
+				// 熱路徑失敗：由 Outbox Worker 冷路徑補發，記錄 WARN 即可
+				logger.Log.Warn("[PlaceOrder] 熱路徑 Kafka 發送失敗，由 Worker 兜底",
+					zap.String("outbox_id", msgID.String()),
+					zap.Error(pubErr),
+				)
+				return
+			}
+			// 熱路徑成功：標記 Published，Worker 輪詢時會跳過此訊息
+			markCtx, markCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer markCancel()
+			if markErr := s.outboxRepo.MarkPublished(markCtx, msgID); markErr != nil {
+				logger.Log.Warn("[PlaceOrder] 標記 Outbox Published 失敗（訊息已成功送達 Kafka）",
+					zap.String("outbox_id", msgID.String()),
+					zap.Error(markErr),
+				)
+			}
+		}(outboxMsg.ID, outboxMsg.Payload, outboxMsg.Topic, outboxMsg.PartitionKey)
+	}
+
+	return nil
 }
 
 func (s *Service) CancelOrder(ctx context.Context, orderID, userID uuid.UUID) error {
@@ -141,6 +178,7 @@ func (s *Service) CancelOrder(ctx context.Context, orderID, userID uuid.UUID) er
 		return fmt.Errorf("無法取消已完成或已取消的訂單")
 	}
 
+	var cancelOutboxMsg *outbox.Message
 	err = s.txManager.ExecTx(ctx, func(ctx context.Context) error {
 		order, err := s.orderRepo.GetOrderForUpdate(ctx, orderID)
 		if err != nil {
@@ -163,21 +201,48 @@ func (s *Service) CancelOrder(ctx context.Context, orderID, userID uuid.UUID) er
 			if marshalErr != nil {
 				return fmt.Errorf("序列化 OrderCancelRequestedEvent 失敗: %w", marshalErr)
 			}
-			if insertErr := s.outboxRepo.Insert(ctx, &outbox.Message{
+			cancelOutboxMsg = &outbox.Message{
 				AggregateID:   order.ID.String(),
 				AggregateType: "order_cancel_requested",
 				Topic:         domain.TopicOrders,
 				PartitionKey:  order.Symbol,
 				Payload:       payload,
-			}); insertErr != nil {
+			}
+			if insertErr := s.outboxRepo.Insert(ctx, cancelOutboxMsg); insertErr != nil {
 				return fmt.Errorf("寫入 Outbox 訊息失敗: %w", insertErr)
 			}
 		}
 
 		return nil
 	})
+	if err != nil {
+		return err
+	}
 
-	return err
+	// === 熱路徑：DB Commit 成功後立刻嘗試直發 Kafka ===
+	if cancelOutboxMsg != nil && s.rawPublisher != nil {
+		go func(msgID uuid.UUID, msgPayload []byte, topic, partitionKey string) {
+			hotCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if pubErr := s.rawPublisher.PublishRaw(hotCtx, topic, partitionKey, msgPayload); pubErr != nil {
+				logger.Log.Warn("[CancelOrder] 熱路徑 Kafka 發送失敗，由 Worker 兜底",
+					zap.String("outbox_id", msgID.String()),
+					zap.Error(pubErr),
+				)
+				return
+			}
+			markCtx, markCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer markCancel()
+			if markErr := s.outboxRepo.MarkPublished(markCtx, msgID); markErr != nil {
+				logger.Log.Warn("[CancelOrder] 標記 Outbox Published 失敗（訊息已成功送達 Kafka）",
+					zap.String("outbox_id", msgID.String()),
+					zap.Error(markErr),
+				)
+			}
+		}(cancelOutboxMsg.ID, cancelOutboxMsg.Payload, cancelOutboxMsg.Topic, cancelOutboxMsg.PartitionKey)
+	}
+
+	return nil
 }
 
 func (s *Service) GetOrder(ctx context.Context, id uuid.UUID) (*domain.Order, error) {
@@ -188,7 +253,7 @@ func (s *Service) GetOrdersByUser(ctx context.Context, userID uuid.UUID) ([]*dom
 	return s.orderRepo.GetOrdersByUser(ctx, userID)
 }
 
-func (s *Service) splitSymbol(symbol string) (base string, quote string, err error) {
+func splitSymbol(symbol string) (base string, quote string, err error) {
 	parts := strings.Split(symbol, "-")
 	if len(parts) != 2 {
 		return "", "", fmt.Errorf("無效的交易對格式")
@@ -197,7 +262,7 @@ func (s *Service) splitSymbol(symbol string) (base string, quote string, err err
 }
 
 func (s *Service) calculateLockAmount(order *domain.Order) (currency string, amount decimal.Decimal, err error) {
-	base, quote, err := s.splitSymbol(order.Symbol)
+	base, quote, err := splitSymbol(order.Symbol)
 	if err != nil {
 		return "", decimal.Zero, err
 	}
@@ -245,13 +310,3 @@ func estimateFromSnapshotAsks(asks []engine.OrderBookLevel, quantity decimal.Dec
 	return decimal.Zero, fmt.Errorf("insufficient liquidity to fulfill market buy (remaining: %s)", remainingQty)
 }
 
-func (s *Service) calculateUnlockAmount(order *domain.Order, remainingQty decimal.Decimal) (currency string, amount decimal.Decimal, err error) {
-	base, quote, err := s.splitSymbol(order.Symbol)
-	if err != nil {
-		return "", decimal.Zero, err
-	}
-	if order.Side == domain.SideBuy {
-		return quote, order.Price.Mul(remainingQty), nil
-	}
-	return base, remainingQty, nil
-}

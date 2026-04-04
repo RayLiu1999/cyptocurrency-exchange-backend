@@ -13,23 +13,23 @@ import (
 	"go.uber.org/zap"
 )
 
-type TradeEventListener interface {
+type MarketDataPublisher interface {
 	OnTrade(trade *engine.Trade)
 	OnOrderUpdate(order *domain.Order)
 	OnOrderBookUpdate(snapshot *engine.OrderBookSnapshot)
 }
 
-// Service 是 market-data-service 專屬的輕量服務。
-// 職責：接收來自 Kafka 的行情事件，透過 TradeEventListener 推播至 WebSocket 連線。
+// Subscriber 是 market-data-service 專屬的輕量服務。
+// 職責：接收來自 Kafka 的行情事件，透過 MarketDataPublisher 推播至 WebSocket 連線。
 // 刻意不依賴 ExchangeServiceImpl，以維持清晰的微服務邊界。
-type Service struct {
-	tradeListener TradeEventListener
+type Subscriber struct {
+	tradeListener MarketDataPublisher
 	cacheRepo     domain.CacheRepository
 }
 
-// NewService 建立 market-data-service 的核心服務
-func NewService(tradeListener TradeEventListener, cacheRepo domain.CacheRepository) *Service {
-	return &Service{
+// NewSubscriber 建立 market-data-service 的核心服務
+func NewSubscriber(tradeListener MarketDataPublisher, cacheRepo domain.CacheRepository) *Subscriber {
+	return &Subscriber{
 		tradeListener: tradeListener,
 		cacheRepo:     cacheRepo,
 	}
@@ -37,7 +37,7 @@ func NewService(tradeListener TradeEventListener, cacheRepo domain.CacheReposito
 
 // HandleOrderBook 是 Kafka exchange.orderbook Topic 的消費者 Handler。
 // matching-engine 撮合完成後，透過 Kafka 推播掛單簿快照，此 handler 接收後轉發至 WebSocket。
-func (s *Service) HandleOrderBook(ctx context.Context, key, value []byte) (err error) {
+func (s *Subscriber) HandleOrderBook(ctx context.Context, key, value []byte) (err error) {
 	start := time.Now()
 	defer func() {
 		metrics.ObserveKafkaEvent("market-data", "exchange.orderbook", err, time.Since(start))
@@ -67,7 +67,7 @@ func (s *Service) HandleOrderBook(ctx context.Context, key, value []byte) (err e
 }
 
 // HandleTrade 是 Kafka exchange.trades Topic 的消費者 Handler。
-func (s *Service) HandleTrade(ctx context.Context, key, value []byte) (err error) {
+func (s *Subscriber) HandleTrade(ctx context.Context, key, value []byte) (err error) {
 	start := time.Now()
 	defer func() {
 		metrics.ObserveKafkaEvent("market-data", "exchange.trades", err, time.Since(start))
@@ -94,7 +94,7 @@ func (s *Service) HandleTrade(ctx context.Context, key, value []byte) (err error
 }
 
 // HandleOrderUpdated 是 Kafka exchange.order_updates Topic 的消費者 Handler。
-func (s *Service) HandleOrderUpdated(ctx context.Context, key, value []byte) (err error) {
+func (s *Subscriber) HandleOrderUpdated(ctx context.Context, key, value []byte) (err error) {
 	start := time.Now()
 	defer func() {
 		metrics.ObserveKafkaEvent("market-data", "exchange.order_updates", err, time.Since(start))

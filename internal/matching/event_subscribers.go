@@ -13,14 +13,14 @@ import (
 	"go.uber.org/zap"
 )
 
-type Service struct {
+type Subscriber struct {
 	engineManager *engine.EngineManager
 	eventBus      domain.EventPublisher
 	cacheRepo     domain.CacheRepository
 }
 
-func NewService(engineManager *engine.EngineManager, eventBus domain.EventPublisher, cacheRepo domain.CacheRepository) *Service {
-	return &Service{
+func NewSubscriber(engineManager *engine.EngineManager, eventBus domain.EventPublisher, cacheRepo domain.CacheRepository) *Subscriber {
+	return &Subscriber{
 		engineManager: engineManager,
 		eventBus:      eventBus,
 		cacheRepo:     cacheRepo,
@@ -30,7 +30,7 @@ func NewService(engineManager *engine.EngineManager, eventBus domain.EventPublis
 // HandleEvents 是 Kafka exchange.orders Topic 的消費者 Handler。
 // 撮合引擎訂閱此 Topic，依照 EventType 路由至對應的處理函式。
 // 透過 symbol 作為 Partition Key，保證同一交易對的所有事件嚴格有序處理。
-func (s *Service) HandleEvents(ctx context.Context, key, value []byte) (err error) {
+func (s *Subscriber) HandleEvents(ctx context.Context, key, value []byte) (err error) {
 	start := time.Now()
 	defer func() {
 		metrics.ObserveKafkaEvent("matching", "exchange.orders", err, time.Since(start))
@@ -68,7 +68,7 @@ func (s *Service) HandleEvents(ctx context.Context, key, value []byte) (err erro
 	}
 }
 
-func (s *Service) convertToMatchingOrder(event *domain.OrderPlacedEvent) *engine.Order {
+func (s *Subscriber) convertToMatchingOrder(event *domain.OrderPlacedEvent) *engine.Order {
 	var matchSide engine.OrderSide
 	if event.Side == domain.SideBuy {
 		matchSide = engine.SideBuy
@@ -84,7 +84,7 @@ func (s *Service) convertToMatchingOrder(event *domain.OrderPlacedEvent) *engine
 }
 
 // handleOrderPlaced 接收 OrderPlacedEvent，執行記憶體撮合，並輸出結算事件。
-func (s *Service) handleOrderPlaced(ctx context.Context, event *domain.OrderPlacedEvent) error {
+func (s *Subscriber) handleOrderPlaced(ctx context.Context, event *domain.OrderPlacedEvent) error {
 	matchOrder := s.convertToMatchingOrder(event)
 	eng := s.engineManager.GetEngine(event.Symbol)
 	trades := eng.Process(matchOrder)
@@ -159,7 +159,7 @@ func (s *Service) handleOrderPlaced(ctx context.Context, event *domain.OrderPlac
 }
 
 // handleOrderCancelRequested 接收 OrderCancelRequestedEvent，從記憶體引擎移除掛單。
-func (s *Service) handleOrderCancelRequested(ctx context.Context, event *domain.OrderCancelRequestedEvent) error {
+func (s *Subscriber) handleOrderCancelRequested(ctx context.Context, event *domain.OrderCancelRequestedEvent) error {
 	var matchSide engine.OrderSide
 	if event.Side == domain.SideBuy {
 		matchSide = engine.SideBuy
@@ -203,7 +203,7 @@ func (s *Service) handleOrderCancelRequested(ctx context.Context, event *domain.
 }
 
 // OnOrderBookUpdate 收到快照後更新 Redis 快取，並發布更新事件
-func (s *Service) OnOrderBookUpdate(symbol string, snapshot *engine.OrderBookSnapshot) {
+func (s *Subscriber) OnOrderBookUpdate(symbol string, snapshot *engine.OrderBookSnapshot) {
 	// 1. 更新 Redis 快取
 	if s.cacheRepo != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -227,4 +227,15 @@ func (s *Service) OnOrderBookUpdate(symbol string, snapshot *engine.OrderBookSna
 			logger.Warn("發布 OrderBookUpdatedEvent 失敗", zap.Error(err))
 		}
 	}
+}
+
+// SyncRecoveredOrderBooks 將冷啟動後恢復到記憶體的掛單簿重新同步到 Redis 與市場資料事件流。
+func (s *Subscriber) SyncRecoveredOrderBooks(depth int) []string {
+	symbols := s.engineManager.GetSymbols()
+	for _, symbol := range symbols {
+		eng := s.engineManager.GetEngine(symbol)
+		snapshot := eng.GetOrderBookSnapshot(depth)
+		s.OnOrderBookUpdate(symbol, snapshot)
+	}
+	return symbols
 }

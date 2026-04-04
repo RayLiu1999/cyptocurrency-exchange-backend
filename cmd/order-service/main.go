@@ -18,7 +18,6 @@ import (
 	"github.com/RayLiu1999/exchange/internal/infrastructure/redis"
 	"github.com/RayLiu1999/exchange/internal/order"
 	"github.com/RayLiu1999/exchange/internal/repository"
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	swaggerFiles "github.com/swaggo/files"
@@ -67,6 +66,9 @@ func main() {
 	if brokers := os.Getenv("KAFKA_BROKERS"); brokers != "" {
 		kafkaCfg.Brokers = strings.Split(brokers, ",")
 	}
+	if resetOffset := os.Getenv("KAFKA_RESET_OFFSET"); resetOffset != "" {
+		kafkaCfg.ResetOffset = strings.ToLower(resetOffset)
+	}
 	if os.Getenv("GIN_MODE") == "release" {
 		kafkaCfg.AllowAutoTopicCreation = false
 	}
@@ -89,32 +91,28 @@ func main() {
 		repo, repo, repo, repo, repo,
 		cacheRepo,
 		eventBus,
+		kafkaProducer, // rawPublisher: 熱路徑直發 Kafka 用
 		outboxRepo,
 	)
 
 	// 4. 啟動 Kafka Consumers
-	consumerCtx, cancelConsumers := context.WithCancel(context.Background())
-	var settleConsumer *kafka.Consumer
+	eventSubscriber := order.NewEventSubscriber(repo, repo, repo, repo, kafkaProducer)
 
-	// 4.1 Settlement consumer（exchange.settlements → TX2 結算寫入 DB）
-	settleConsumer, err = kafka.NewConsumer(kafkaCfg, "settlement-engine", []string{domain.TopicSettlements})
+	consumerCtx, cancelConsumers := context.WithCancel(context.Background())
+	defer cancelConsumers()
+
+	settleConsumer, err := kafka.NewConsumer(kafkaCfg, "order-service", []string{domain.TopicSettlements})
 	if err != nil {
-		logger.Log.Fatal("order-service: 建立 settlement consumer 失敗", zap.Error(err))
+		logger.Log.Fatal("order-service: 建立結算 consumer 失敗", zap.Error(err))
 	}
-	settleConsumer.Start(consumerCtx, svc.HandleEvents)
-	logger.Log.Info("Settlement consumer 已啟動", zap.String("topic", domain.TopicSettlements))
+	settleConsumer.Start(consumerCtx, eventSubscriber.HandleEvents)
+	logger.Log.Info("Kafka settlement consumer 已啟動", zap.String("topic", domain.TopicSettlements))
 
 	// 5. HTTP 路由（僅供 Gateway 反向代理，安全 Middleware 已在 Gateway 層完成）
-	r := gin.Default()
+	r := gin.New()
+	r.Use(gin.Recovery())
 	r.Use(metrics.Middleware("order-service"))
 	r.GET("/metrics", gin.WrapH(metrics.Handler()))
-	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3000"},
-		AllowMethods:     []string{"GET", "POST", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Idempotency-Key"},
-		AllowCredentials: false,
-		MaxAge:           12 * time.Hour,
-	}))
 
 	handler := api.NewHandler(svc, nil)
 	v1 := r.Group("/api/v1")
@@ -124,7 +122,7 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "order-service"})
 	})
 	r.Static("/docs", "docs")
-	url := ginSwagger.URL("http://localhost:8080/docs/swagger.yaml")
+	url := ginSwagger.URL("/docs/architecture/swagger.yaml")
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, url))
 
 	// 6. 啟動 HTTP 伺服器

@@ -57,9 +57,9 @@ func NewWebSocketHandler(serviceName string) *WebSocketHandler {
 }
 
 // Ensure implementation
-var _ marketdata.TradeEventListener = (*WebSocketHandler)(nil)
+var _ marketdata.MarketDataPublisher = (*WebSocketHandler)(nil)
 
-// OnOrderBookUpdate 實作 TradeEventListener 介面 — 推播掛單簿深度快照
+// OnOrderBookUpdate 實作 MarketDataPublisher 介面 — 推播掛單簿深度快照
 func (h *WebSocketHandler) OnOrderBookUpdate(snapshot *engine.OrderBookSnapshot) {
 	msg := map[string]any{
 		"type": "depth_snapshot",
@@ -75,7 +75,7 @@ func (h *WebSocketHandler) OnOrderBookUpdate(snapshot *engine.OrderBookSnapshot)
 	h.Broadcast(jsonMsg, "depth_snapshot")
 }
 
-// OnTrade 實作 TradeEventListener 介面
+// OnTrade 實作 MarketDataPublisher 介面
 func (h *WebSocketHandler) OnTrade(trade *engine.Trade) {
 	// 轉換為 JSON 訊息
 	msg := map[string]any{
@@ -100,7 +100,7 @@ func (h *WebSocketHandler) OnTrade(trade *engine.Trade) {
 	h.Broadcast(jsonMsg, "trade")
 }
 
-// OnOrderUpdate 實作 TradeEventListener 介面
+// OnOrderUpdate 實作 MarketDataPublisher 介面
 func (h *WebSocketHandler) OnOrderUpdate(order *domain.Order) {
 	msg := map[string]any{
 		"type": "order_update",

@@ -17,7 +17,6 @@ import (
 	"github.com/RayLiu1999/exchange/internal/infrastructure/redis"
 	"github.com/RayLiu1999/exchange/internal/marketdata"
 	"github.com/RayLiu1999/exchange/internal/repository"
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
@@ -33,6 +32,9 @@ func main() {
 	kafkaCfg := kafka.DefaultConfig()
 	if brokers := os.Getenv("KAFKA_BROKERS"); brokers != "" {
 		kafkaCfg.Brokers = strings.Split(brokers, ",")
+	}
+	if resetOffset := os.Getenv("KAFKA_RESET_OFFSET"); resetOffset != "" {
+		kafkaCfg.ResetOffset = strings.ToLower(resetOffset)
 	}
 
 	// Connect to Database for queries
@@ -66,7 +68,7 @@ func main() {
 	go wsHandler.Run()
 
 	// MarketData Service
-	svc := marketdata.NewService(wsHandler, cacheRepo)
+	svc := marketdata.NewSubscriber(wsHandler, cacheRepo)
 
 	querySvc := marketdata.NewQueryService(repo, cacheRepo)
 
@@ -75,7 +77,7 @@ func main() {
 	var orderBookConsumer *kafka.Consumer
 	var tradeConsumer *kafka.Consumer
 	var orderUpdateConsumer *kafka.Consumer
-	
+
 	orderBookConsumer, err = kafka.NewConsumer(kafkaCfg, "market-data-orderbook", []string{domain.TopicOrderBook})
 	if err != nil {
 		logger.Log.Fatal("market-data-service: 建立 orderbook consumer 失敗", zap.Error(err))
@@ -99,13 +101,6 @@ func main() {
 	// HTTP 伺服器
 	r := gin.Default()
 	r.Use(metrics.Middleware("market-data-service"))
-	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3000", "http://localhost:8084"},
-		AllowMethods:     []string{"GET", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept"},
-		AllowCredentials: false,
-		MaxAge:           12 * time.Hour,
-	}))
 	r.GET("/metrics", gin.WrapH(metrics.Handler()))
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "market-data-service"})
