@@ -44,16 +44,18 @@ func (r *Repository) Insert(ctx context.Context, msg *Message) error {
 }
 
 // FetchPending 批次取出尚未發送的 Outbox 訊息（最多 batchSize 筆）
+// 增加 gracePeriod 參數，確保只抓取建立時間超過冷靜期的訊息（避免與熱路徑發生 Race Condition）
 // 使用 SKIP LOCKED 確保多個 Worker 實例不會取到同一批訊息
-func (r *Repository) FetchPending(ctx context.Context, batchSize int) ([]*Message, error) {
+func (r *Repository) FetchPending(ctx context.Context, batchSize int, gracePeriod time.Duration) ([]*Message, error) {
+	threshold := time.Now().Add(-gracePeriod).UnixMilli()
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, aggregate_id, aggregate_type, topic, partition_key, payload, status, retry_count, created_at, published_at
 		FROM outbox_messages
-		WHERE status = $1
+		WHERE status = $1 AND created_at <= $2
 		ORDER BY created_at ASC
-		LIMIT $2
+		LIMIT $3
 		FOR UPDATE SKIP LOCKED`,
-		StatusPending, batchSize,
+		StatusPending, threshold, batchSize,
 	)
 	if err != nil {
 		return nil, err

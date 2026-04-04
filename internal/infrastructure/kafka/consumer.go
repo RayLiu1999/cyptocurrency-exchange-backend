@@ -23,13 +23,26 @@ type Consumer struct {
 
 // NewConsumer 建立 Kafka 消費者
 func NewConsumer(cfg Config, groupID string, topics []string) (*Consumer, error) {
+	resetOffset := kgo.NewOffset().AtEnd() // 預設從 latest 開始消費，避免重放舊事件造成問題
+	switch cfg.ResetOffset {
+	case "", "latest":
+		resetOffset = kgo.NewOffset().AtEnd()
+	case "earliest":
+		resetOffset = kgo.NewOffset().AtStart()
+	default:
+		logger.Warn("未知的 Kafka reset offset 設定，改用 latest",
+			zap.String("group", groupID),
+			zap.String("reset_offset", cfg.ResetOffset),
+		)
+	}
+
 	client, err := kgo.NewClient(
-		kgo.SeedBrokers(cfg.Brokers...),
-		kgo.ConsumerGroup(groupID),
-		kgo.ConsumeTopics(topics...),
-		kgo.DisableAutoCommit(),
-		// 從最早的 Offset 開始消費（確保重啟後不遺漏訊息）
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.SeedBrokers(cfg.Brokers...), // Kafka broker 地址
+		kgo.ConsumerGroup(groupID),      // 消費者群組 ID
+		kgo.ConsumeTopics(topics...),    // 消費的 topic
+		kgo.DisableAutoCommit(),         // 關閉自動 commit
+		// 若 consumer group 沒有 committed offset，預設從 latest 開始，避免 DB 已有狀態時重放舊事件造成鬼單/重複結算。
+		kgo.ConsumeResetOffset(resetOffset), // 重置 offset
 	)
 	if err != nil {
 		return nil, err
@@ -47,10 +60,10 @@ func NewConsumer(cfg Config, groupID string, topics []string) (*Consumer, error)
 func (c *Consumer) Start(ctx context.Context, handler HandlerFunc) {
 	c.wg.Add(1)
 	go func() {
-		defer c.wg.Done()
-		defer c.client.Close()
+		defer c.wg.Done()      // 確保 Wait() 能正常工作
+		defer c.client.Close() // 確保 client 能正常關閉
 		for {
-			fetches := c.client.PollFetches(ctx)
+			fetches := c.client.PollFetches(ctx) // 輪詢 Kafka，獲取新訊息
 
 			// Context 被取消，優雅退出
 			if ctx.Err() != nil {
@@ -69,7 +82,7 @@ func (c *Consumer) Start(ctx context.Context, handler HandlerFunc) {
 			}
 
 			fetches.EachRecord(func(record *kgo.Record) {
-				backoff := 100 * time.Millisecond
+				backoff := 100 * time.Millisecond // 初始 backoff 時間
 				for {
 					if ctx.Err() != nil {
 						return

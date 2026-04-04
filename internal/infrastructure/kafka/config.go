@@ -7,7 +7,8 @@ type Config struct {
 	Brokers                []string
 	ConnectTimeout         time.Duration
 	PublishTimeout         time.Duration
-	AllowAutoTopicCreation bool // 只有開發環境應開啟，生產環境應關閉
+	AllowAutoTopicCreation bool   // 只有開發環境應開啟，生產環境應關閉
+	ResetOffset            string // consumer group 無 committed offset 時的起始策略: latest | earliest
 }
 
 // DefaultConfig 返回本地開發預設設定
@@ -17,5 +18,6 @@ func DefaultConfig() Config {
 		ConnectTimeout:         5 * time.Second,
 		PublishTimeout:         2 * time.Second,
 		AllowAutoTopicCreation: true, // 本地開發預設開啟
+		ResetOffset:            "latest",
 	}
 }

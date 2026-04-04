@@ -59,7 +59,8 @@ func (w *Worker) process(ctx context.Context) {
 		metrics.SetOutboxPendingCount(float64(pending))
 	}
 
-	msgs, err := w.repo.FetchPending(ctx, w.batchSize)
+	// 加上 5 秒冷靜期，避免搶到剛被熱路徑建立、且正在發送中的事件
+	msgs, err := w.repo.FetchPending(ctx, w.batchSize, 5*time.Second)
 	if err != nil {
 		logger.Log.Error("Outbox Worker 讀取 Pending 訊息失敗", zap.Error(err))
 		return
