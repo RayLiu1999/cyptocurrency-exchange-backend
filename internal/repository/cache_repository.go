@@ -4,11 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/RayLiu1999/exchange/internal/domain"
-	"github.com/RayLiu1999/exchange/internal/matching/engine"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/redis"
+	"github.com/RayLiu1999/exchange/internal/matching/engine"
 )
 
 // RedisCacheRepository 實作 core.CacheRepository 介面 (Redis 版本)
@@ -43,9 +42,9 @@ func (r *RedisCacheRepository) GetOrderBookSnapshot(ctx context.Context, symbol 
 	return &snapshot, nil
 }
 
-// SetOrderBookSnapshot 將訂單簿快照寫入 Redis，TTL 設為 10 秒
-// 為什麼只設 10 秒？因為在高頻交易下，訂單簿頻繁更新，10秒內一定有下一個覆蓋。
-// 若 10 秒無交易，讓快取自然過期，下次讀取時 fallback 回 Memory 也能確保資料新鮮。
+// SetOrderBookSnapshot 將訂單簿快照寫入 Redis。
+// 這裡刻意不設定 TTL，因為 market-data-service 的讀路徑以 Redis 為唯一快取來源；
+// 若靜態掛單簿在無交易期間過期，對外查詢會誤判成空盤。
 func (r *RedisCacheRepository) SetOrderBookSnapshot(ctx context.Context, snapshot *engine.OrderBookSnapshot) error {
 	key := fmt.Sprintf("exchange:orderbook:%s", snapshot.Symbol)
 
@@ -55,8 +54,8 @@ func (r *RedisCacheRepository) SetOrderBookSnapshot(ctx context.Context, snapsho
 		return fmt.Errorf("序列化快取失敗: %w", err)
 	}
 
-	// 寫入 Redis 並設定 TTL
-	if err := r.client.Client.Set(ctx, key, data, 10*time.Second).Err(); err != nil {
+	// 寫入 Redis，保持到下一次快照覆蓋。
+	if err := r.client.Client.Set(ctx, key, data, 0).Err(); err != nil {
 		return fmt.Errorf("寫入 Redis 失敗: %w", err)
 	}
 

@@ -2,7 +2,6 @@ package marketdata
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/RayLiu1999/exchange/internal/domain"
@@ -34,8 +33,12 @@ func (s *queryServiceImpl) GetOrderBook(ctx context.Context, symbol string) (*en
 		}
 		logger.Log.Info("💨 [Redis Cache] Miss", zap.String("symbol", symbol))
 	}
-	// 在沒有同步讀取 matching-engine 的模式下，若 cache miss，回傳空或者錯誤
-	return nil, fmt.Errorf("無法取得 OrderBook (Cache Miss 或未啟用 Cache)")
+	// 若 cache miss 或快取未啟用，回傳預設的空掛單簿，而不是回傳 Error 導致 500
+	return &engine.OrderBookSnapshot{
+		Symbol: symbol,
+		Bids:   []engine.OrderBookLevel{},
+		Asks:   []engine.OrderBookLevel{},
+	}, nil
 }
 
 func (s *queryServiceImpl) GetKLines(ctx context.Context, symbol string, interval string, limit int) ([]*domain.KLine, error) {
