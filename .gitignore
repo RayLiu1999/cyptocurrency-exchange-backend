@@ -75,3 +75,11 @@ deploy/terraform/environments/**/terraform.tfstate.backup
 deploy/ecspresso/**/test-tfstate.json
 deploy/ecspresso/**/ecspresso.yml
 
+
+# --- Services
+matching-engine
+gateway
+order-service
+matching-engine
+market-data-service
+simulation-service

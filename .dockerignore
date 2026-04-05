@@ -35,3 +35,10 @@ Dockerfile*
 # Miscellaneous
 README.md
 Makefile
+
+# Services
+gateway
+order-service
+matching-engine
+market-data-service
+simulation-service
