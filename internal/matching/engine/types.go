@@ -72,9 +72,10 @@ type OrderBookLevel struct {
 
 // OrderBookSnapshot 訂單簿快照 (用於 API 回傳)
 type OrderBookSnapshot struct {
-	Symbol string           `json:"symbol"`
-	Bids   []OrderBookLevel `json:"bids"` // 買單 (Price DESC)
-	Asks   []OrderBookLevel `json:"asks"` // 賣單 (Price ASC)
+	Symbol       string           `json:"symbol"`
+	Bids         []OrderBookLevel `json:"bids"` // 買單 (Price DESC)
+	Asks         []OrderBookLevel `json:"asks"` // 賣單 (Price ASC)
+	FencingToken int64            `json:"fencing_token"` // 防腦裂令牌，確保 Redis LWW (Last Write Wins) 語意
 }
 
 func NewOrderBookSnapshot(symbol string) *OrderBookSnapshot {

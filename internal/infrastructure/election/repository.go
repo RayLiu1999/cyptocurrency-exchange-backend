@@ -81,3 +81,33 @@ func (r *Repository) ReleaseLock(ctx context.Context, partition, instanceID stri
 	)
 	return err
 }
+
+// ValidateFencingToken 驗證訊息中的 FencingToken 是否仍與目前 DB 中的 Leader 相符。
+// 用於結算服務攔截殭屍訊息（舊 Leader 在失去身份後仍發出的殘留訊息）。
+// 傳入 token <= 0 時直接通過驗證（向後相容舊版不帶 Token 的訊息）。
+// 傳入 token < currentToken 時代表此為殭屍訊息，回傳 (false, nil)。
+func (r *Repository) ValidateFencingToken(ctx context.Context, partition string, token int64) (valid bool, err error) {
+	if token <= 0 {
+		// token 為 0 代表訊息來自尚未整合 FencingToken 的舊版，允許通過以保持向後相容
+		return true, nil
+	}
+
+	var currentToken int64
+	err = r.pool.QueryRow(ctx, `
+		SELECT fencing_token FROM partition_leader_locks
+		WHERE partition = $1`,
+		partition,
+	).Scan(&currentToken)
+	if err != nil {
+		// 若 DB 中找不到鎖記錄（ErrNoRows），代表目前沒有 Leader 持有鎖
+		// 允許通過：結算服務做後續冪等保護即可
+		return true, nil
+	}
+
+	// token < currentToken：此訊息來自舊一代 Leader，是殭屍訊息，應拒絕
+	if token < currentToken {
+		return false, nil
+	}
+	return true, nil
+}
+

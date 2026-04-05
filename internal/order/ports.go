@@ -10,8 +10,21 @@ import (
 )
 
 // DBTransaction 定義事務操作介面
+//
+// ExecTx 開啟一個資料庫事務，並將 pgx.Tx 注入 Context。
+// 所有在 fn 內部呼叫的 Repository 方法都會自動感知並使用同一個 Tx。
+//
+// ValidateFencingTokenTx 也必須在 fn 閉包的 Context 下呼叫，
+// 確保 Token 驗證與後續的 UPDATE 帳戶餘額在同一個 Tx 內原子執行。
 type DBTransaction interface {
 	ExecTx(ctx context.Context, fn func(ctx context.Context) error) error
+
+	// ValidateFencingTokenTx 在目前的資料庫事務內驗證 FencingToken 是否合法。
+	// 關鍵：使用 FOR SHARE 行鎖，阻止其他事務（新 Leader 上位）在此期間
+	// 修改 partition_leader_locks，形成一道原子性「護城河」。
+	// token <= 0 時直接通過（向後相容）。
+	// 若 token < DB 中的 current token，代表是殭屍訊息，回傳 false。
+	ValidateFencingTokenTx(ctx context.Context, partition string, token int64) (valid bool, err error)
 }
 
 // OrderRepository defines the interface for order persistence

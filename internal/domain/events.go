@@ -62,13 +62,13 @@ type OrderCancelRequestedEvent struct {
 	UserID    uuid.UUID `json:"user_id"`
 }
 
-// OrderCanceledEvent 撮合引擎確認已從訂單簿移除後發布
-// 通知結算系統 (Settlement Consumer) 退還未成交之餘額並更新訂單狀態為 CANCELED
+// OrderCanceledEvent 訂單取消事件
 type OrderCanceledEvent struct {
-	EventType EventType `json:"event_type"`
-	Symbol    string    `json:"symbol"`
-	OrderID   uuid.UUID `json:"order_id"`
-	UserID    uuid.UUID `json:"user_id"`
+	EventType    EventType `json:"event_type"`
+	Symbol       string    `json:"symbol"`
+	OrderID      uuid.UUID `json:"order_id"`
+	UserID       uuid.UUID `json:"user_id"`
+	FencingToken int64     `json:"fencing_token"` // 防腦裂令牌
 }
 
 // SettlementRequestedEvent matching_consumer 撮合完成後發布，攜帶全部成交資訊供 TX2 結算
@@ -81,6 +81,7 @@ type SettlementRequestedEvent struct {
 	LockedCurrency string            `json:"locked_currency"` // 鎖定幣種
 	RemainingQty   decimal.Decimal  `json:"remaining_qty"`   // 撮合後剩餘數量（用於判斷 PartialFilled / STP）
 	Trades         []*engine.Trade  `json:"trades"`          // 本次撮合產生的所有成交記錄
+	FencingToken   int64            `json:"fencing_token"`   // 防腦裂令牌：下游結算服務用此驗證訊息是否來自合法 Leader
 }
 
 // TradeExecutedEvent 每筆個別成交事件（供 WebSocket 推播與外部訂閱）

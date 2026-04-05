@@ -29,11 +29,14 @@ type AccountUpdate struct {
 	Unlock   decimal.Decimal
 }
 
-// EventSubscriber 是負責處理 Kafka 事件的獨立服務 (CQRS - 讀寫分離下的非同部事件處理)
+// EventSubscriber 是負責處理 Kafka 事件的独立服務 (CQRS - 讀寫分離下的非同部事件處理)
 type EventSubscriber struct {
 	orderRepo   OrderRepository
 	accountRepo AccountRepository
 	tradeRepo   TradeRepository
+	// txManager 切分兩個职責:
+	// 1. ExecTx：開啟資料庫事務并將 Tx 注入 Context
+	// 2. ValidateFencingTokenTx：在 Tx 內部驗證 Token，是防腦裂的最後一道鐵閘
 	txManager   DBTransaction
 	eventBus    domain.EventPublisher
 }
@@ -138,6 +141,20 @@ func (s *EventSubscriber) handleOrderCanceled(ctx context.Context, event *domain
 	var orderSymbol string // Used for the updated event
 
 	err := s.txManager.ExecTx(ctx, func(ctx context.Context) error {
+		if event.FencingToken > 0 {
+			valid, err := s.txManager.ValidateFencingTokenTx(ctx, "matching-engine:global", event.FencingToken)
+			if err != nil {
+				return fmt.Errorf("TX 內部驗證 FencingToken 失敗: %w", err)
+			}
+			if !valid {
+				logger.Warn("⚠️ 殭屍訊息攔截：FencingToken 不符，此取消事件來自舊 Leader，已安全丟棄",
+					zap.Int64("event_fencing_token", event.FencingToken),
+					zap.String("order_id", event.OrderID.String()),
+				)
+				return ErrStaleSettlementEvent
+			}
+		}
+
 		order, err := s.orderRepo.GetOrderForUpdate(ctx, event.OrderID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -202,6 +219,34 @@ func (s *EventSubscriber) executeSettlementTx(ctx context.Context, event *domain
 	var updatedOrders []*domain.Order
 
 	err := s.txManager.ExecTx(ctx, func(ctx context.Context) error {
+
+		// ╔══════════════════════════════════════════════════════════════════╗
+		// ║  🛡️  第一道保險箱：Fencing Token 原子驗證（終極防腦裂）         ║
+		// ╠══════════════════════════════════════════════════════════════════╣
+		// ║  此時我們已在 DB Transaction 內部。                              ║
+		// ║  ValidateFencingTokenTx 執行：                                   ║
+		// ║  SELECT fencing_token FROM partition_leader_locks FOR SHARE       ║
+		// ║                                                                   ║
+		// ║  FOR SHARE 的意義：在此 Tx Commit 前，                           ║
+		// ║  任何想修改 partition_leader_locks（如新 Leader 上位）的事務     ║
+		// ║  都會在資料庫層面被卡住，必須等待。                              ║
+		// ║  → 即使 GC 導致本服務發呆 N 秒，殭屍訊息也絕不可能穿透。        ║
+		// ╚══════════════════════════════════════════════════════════════════╝
+		if event.FencingToken > 0 {
+			valid, err := s.txManager.ValidateFencingTokenTx(ctx, "matching-engine:global", event.FencingToken)
+			if err != nil {
+				return fmt.Errorf("TX 內部驗證 FencingToken 失敗: %w", err)
+			}
+			if !valid {
+				logger.Warn("⚠️ 殭屍訊息攔截：FencingToken 不符，此訊息來自舊 Leader，已安全丟棄",
+					zap.Int64("event_fencing_token", event.FencingToken),
+					zap.String("taker_order_id", event.TakerOrderID.String()),
+				)
+				// 回傳 ErrStaleSettlementEvent，讓外層跳過此訊息並正常 Commit Kafka Offset
+				// 不回傳一般 error，避免 Consumer 重試無限循環
+				return ErrStaleSettlementEvent
+			}
+		}
 
 		makerOrderIDsMap := make(map[uuid.UUID]bool)
 		for _, trade := range event.Trades {

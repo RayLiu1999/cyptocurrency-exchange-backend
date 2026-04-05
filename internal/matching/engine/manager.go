@@ -50,3 +50,13 @@ func (m *EngineManager) GetSymbols() []string {
 	}
 	return symbols
 }
+
+// Reset 清除所有記憶體中的撮合引擎狀態。
+// 在 Leader Election 發生切換時呼叫，確保新 Leader 從乾淨狀態重新載入 DB 快照，
+// 防止舊 Leader 的殘留掛單資料污染新一輪的撮合結果。
+func (m *EngineManager) Reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.engines = make(map[string]*Engine)
+}
+

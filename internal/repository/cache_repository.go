@@ -54,9 +54,33 @@ func (r *RedisCacheRepository) SetOrderBookSnapshot(ctx context.Context, snapsho
 		return fmt.Errorf("序列化快取失敗: %w", err)
 	}
 
-	// 寫入 Redis，保持到下一次快照覆蓋。
-	if err := r.client.Client.Set(ctx, key, data, 0).Err(); err != nil {
-		return fmt.Errorf("寫入 Redis 失敗: %w", err)
+	// Redis Lua 腳本：LWW (Last Write Wins) 透過 FencingToken 比較
+	// 解析現有 JSON 快照中的 fencing_token，若傳入的 token 比較小，則拒絕寫入。
+	// 這保護了前端畫面不會因為殭屍機器的延遲快照而閃爍（幽靈掛單）。
+	const luaScript = `
+	local current_val = redis.call('GET', KEYS[1])
+	if current_val then
+		-- 使用 cjson 安全解碼，即使是舊版（沒有 fencing_token），預設為 0
+		local success, decoded = pcall(cjson.decode, current_val)
+		if success and type(decoded) == "table" then
+			local current_token = tonumber(decoded.fencing_token) or 0
+			local new_token = tonumber(ARGV[1]) or 0
+			if new_token > 0 and new_token < current_token then
+				return 0 -- Stale token, 拒絕寫入
+			end
+		end
+	end
+	redis.call('SET', KEYS[1], ARGV[2])
+	return 1
+	`
+
+	res, err := r.client.Client.Eval(ctx, luaScript, []string{key}, snapshot.FencingToken, data).Result()
+	if err != nil {
+		return fmt.Errorf("寫入 Redis 快照腳本失敗: %w", err)
+	}
+
+	if res.(int64) == 0 {
+		return fmt.Errorf("殭屍快照攔截：Token %d 小於快取中版本，已拒絕寫入大盤畫面", snapshot.FencingToken)
 	}
 
 	return nil

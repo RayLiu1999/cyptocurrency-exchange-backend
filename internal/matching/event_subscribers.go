@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/RayLiu1999/exchange/internal/domain"
@@ -17,6 +18,7 @@ type Subscriber struct {
 	engineManager *engine.EngineManager
 	eventBus      domain.EventPublisher
 	cacheRepo     domain.CacheRepository
+	fencingToken  atomic.Int64 // 目前合法的 Leader FencingToken，0 = Standby（不應撮合）
 }
 
 func NewSubscriber(engineManager *engine.EngineManager, eventBus domain.EventPublisher, cacheRepo domain.CacheRepository) *Subscriber {
@@ -27,10 +29,24 @@ func NewSubscriber(engineManager *engine.EngineManager, eventBus domain.EventPub
 	}
 }
 
+// SetFencingToken 由 Leader Elector 在成為 Leader 時呼叫，更新合法令牌。
+// 失去 Leader 身份時應傳入 0（哨兵值），使 HandleEvents 拒絕所有撮合請求。
+func (s *Subscriber) SetFencingToken(token int64) {
+	s.fencingToken.Store(token)
+}
+
 // HandleEvents 是 Kafka exchange.orders Topic 的消費者 Handler。
 // 撮合引擎訂閱此 Topic，依照 EventType 路由至對應的處理函式。
 // 透過 symbol 作為 Partition Key，保證同一交易對的所有事件嚴格有序處理。
+// 安全防護：若目前不是合法 Leader（fencingToken == 0），拒絕處理任何訊息。
 func (s *Subscriber) HandleEvents(ctx context.Context, key, value []byte) (err error) {
+	// 防腦裂：確認自己仍是合法 Leader，才允許執行撮合
+	if s.fencingToken.Load() == 0 {
+		logger.Warn("HandleEvents：目前非合法 Leader，拒絕撮合以防腦裂",
+			zap.String("reason", "fencing_token is 0"),
+		)
+		return nil
+	}
 	start := time.Now()
 	defer func() {
 		metrics.ObserveKafkaEvent("matching", "exchange.orders", err, time.Since(start))
@@ -101,6 +117,7 @@ func (s *Subscriber) handleOrderPlaced(ctx context.Context, event *domain.OrderP
 			LockedCurrency: event.LockedCurrency,
 			RemainingQty:   matchOrder.Quantity, // 撮合後的剩餘數量（STP 偵測用）
 			Trades:         trades,
+			FencingToken:   s.fencingToken.Load(), // 帶入令牌，供下游驗證是否為殭屍訊息
 		}
 		// 🌟 修正：原地無限重試發布，絕不 return err 導致重新撮合
 		for {
@@ -173,10 +190,11 @@ func (s *Subscriber) handleOrderCancelRequested(ctx context.Context, event *doma
 	if canceled {
 		if s.eventBus != nil {
 			canceledEvent := &domain.OrderCanceledEvent{
-				EventType: domain.EventOrderCanceled,
-				Symbol:    event.Symbol,
-				OrderID:   event.OrderID,
-				UserID:    event.UserID,
+				EventType:    domain.EventOrderCanceled,
+				Symbol:       event.Symbol,
+				OrderID:      event.OrderID,
+				UserID:       event.UserID,
+				FencingToken: s.fencingToken.Load(),
 			}
 			for {
 				err := s.eventBus.Publish(ctx, domain.TopicSettlements, event.Symbol, canceledEvent)
@@ -204,6 +222,9 @@ func (s *Subscriber) handleOrderCancelRequested(ctx context.Context, event *doma
 
 // OnOrderBookUpdate 收到快照後更新 Redis 快取，並發布更新事件
 func (s *Subscriber) OnOrderBookUpdate(symbol string, snapshot *engine.OrderBookSnapshot) {
+	// 印上當代 Leader 的防腦裂令牌
+	snapshot.FencingToken = s.fencingToken.Load()
+
 	// 1. 更新 Redis 快取
 	if s.cacheRepo != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

@@ -96,6 +96,8 @@ func main() {
 	)
 
 	// 4. 啟動 Kafka Consumers
+	// PostgresRepository 現在直接實作 DBTransaction.ValidateFencingTokenTx，
+	// 在 ExecTx 閉包內部以 FOR SHARE 原子驗證 Fencing Token，不再需要外部 electionRepo
 	eventSubscriber := order.NewEventSubscriber(repo, repo, repo, repo, kafkaProducer)
 
 	consumerCtx, cancelConsumers := context.WithCancel(context.Background())
