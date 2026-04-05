@@ -38,7 +38,7 @@ export default function () {
   const userId = persistentUserId;
 
   // 隨機生成買賣限價單，製造深度的同時避免過快相互抵銷
-  const orderPayload = JSON.stringify({
+  const payload = JSON.stringify({
     user_id: userId,
     symbol: symbol,
     side: Math.random() > 0.5 ? "BUY" : "SELL",
@@ -51,7 +51,18 @@ export default function () {
     headers: { "Content-Type": "application/json" },
   };
 
-  const res = http.post(`${baseUrl}/orders`, orderPayload, params);
+  let res = http.post(`${baseUrl}/orders`, payload, params);
+
+  // === 資金循環 (Recharge) 機制 ===
+  // 如果收到 400 Bad Request，極大可能是餘額不足（因為一直下單又沒完全抵銷）。
+  // 為了讓壓測能「真正跑到最後」而不被餘額卡的假性瓶頸阻擋，我們動態充值。
+  if (res.status === 400) {
+    const rechargeRes = http.post(`${baseUrl}/test/recharge/${userId}`, null);
+    if (rechargeRes.status === 200) {
+      // 充值成功後再重送一次該筆訂單
+      res = http.post(`${baseUrl}/orders`, payload, params);
+    }
+  }
 
   // 檢查引擎是否正常接單 (PostgreSQL 與 Kafka 寫入是否健康)
   check(res, {

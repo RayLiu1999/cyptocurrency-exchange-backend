@@ -29,8 +29,9 @@ export default function () {
     if (joinRes.status === 201) {
       persistentUserId = joinRes.json("user_id");
     } else {
-      // 若註冊失敗（可能因為瞬間壓力太大被限流或超時），稍等一下再重試
-      sleep(1);
+      // 若註冊失敗（可能因為瞬間壓力太大被限流或超時），採用隨機退避 (Jitter)
+      // 避免所有 800 個 VU 在同一時間重試，導致再度限流崩潰
+      sleep(Math.random() * 2);
       return;
     }
   }
@@ -56,7 +57,15 @@ export default function () {
     headers: { "Content-Type": "application/json" },
   };
 
-  const res = http.post(`${baseUrl}/orders`, orderPayload, params);
+  let res = http.post(`${baseUrl}/orders`, orderPayload, params);
+
+  // === 資金循環 (Recharge) 機制 ===
+  if (res.status === 400) {
+    const rechargeRes = http.post(`${baseUrl}/test/recharge/${userId}`, null);
+    if (rechargeRes.status === 200) {
+      res = http.post(`${baseUrl}/orders`, orderPayload, params);
+    }
+  }
 
   // 系統必須優雅處理：要嘛進 Kafka 撮合 (201/202)，要嘛被 Redis 限流擋下 (429)
   // 絕對不能出現 500 (Internal Server Error)

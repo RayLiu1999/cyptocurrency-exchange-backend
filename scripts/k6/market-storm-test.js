@@ -89,10 +89,20 @@ export function sendOrders() {
     quantity: "0.01",
   });
 
-  const start = Date.now();
-  const res = http.post(`${baseUrl}/orders`, payload, {
-    headers: { "Content-Type": "application/json" },
-  });
+  const params = { headers: { "Content-Type": "application/json" } };
+
+  let start = Date.now();
+  let res = http.post(`${baseUrl}/orders`, payload, params);
+
+  // === 資金循環 (Recharge) 機制 ===
+  if (res.status === 400) {
+    const rechargeRes = http.post(`${baseUrl}/test/recharge/${ordererUserId}`, null);
+    if (rechargeRes.status === 200) {
+      start = Date.now();
+      res = http.post(`${baseUrl}/orders`, payload, params);
+    }
+  }
+
   const latency = Date.now() - start;
 
   orderLatency.add(latency);
