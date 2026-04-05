@@ -47,6 +47,8 @@ func (r *mockOutboxRepo) FetchPending(ctx context.Context, batchSize int, graceP
 		if m.Status == outbox.StatusPending && m.CreatedAt <= threshold {
 			clone := *m
 			result = append(result, &clone)
+			// 模擬 SKIP LOCKED 行為：在取出後立刻轉換狀態為處理中，避免其他 Worker 拿到重複的訊息
+			m.Status = outbox.StatusPublished
 			if len(result) >= batchSize {
 				break
 			}
@@ -241,10 +243,10 @@ func TestOutbox_SkipLocked_Concurrency_DesignValidation(t *testing.T) {
 	}
 	wg.Wait()
 
-	// 由於 mock 沒有真正的 SKIP LOCKED（只有 mutex），
-	// 可能會超過 5，但此測試的目的是確保介面設計正確
-	assert.LessOrEqual(t, int64(5), totalFetched.Load()+0,
-		"設計驗證：FetchPending 介面正確接受 batchSize 與 gracePeriod 參數")
+	// 現在 mockOutboxRepo 有模擬 SKIP LOCKED，
+	// 此處總量保證精準等於 5 筆（不會重複取拿）。
+	assert.Equal(t, int64(5), totalFetched.Load(),
+		"設計驗證：多 goroutine 併發下，訊息被正確互斥取出，無重複消費")
 
-	t.Log("注意：並行安全的 SKIP LOCKED 行為需要搭配 PostgreSQL 的整合測試才能完整驗證")
+	t.Log("Note: mock 涵蓋了基礎驗證，真實的 SKIP LOCKED 需在 integration test 中由實體 PostgreSQL 提供。")
 }

@@ -148,7 +148,7 @@ func TestAccountRepository_LockFunds_InsufficientFunds_ReturnsError(t *testing.T
 		CreatedAt: now, UpdatedAt: now,
 	}))
 	err := repo.LockFunds(ctx, user.ID, "USD", decimal.NewFromInt(100))
-	assert.ErrorIs(t, err, core.ErrInsufficientFunds)
+	assert.ErrorIs(t, err, domain.ErrInsufficientFunds)
 }
 
 func TestAccountRepository_GetAccountsByUser(t *testing.T) {
@@ -346,4 +346,40 @@ func TestExecTx_Failure_ChangesRolledBack(t *testing.T) {
 	assert.Nil(t, acc)
 	order, _ := repo.GetOrder(ctx, rolledBackOrderID)
 	assert.Nil(t, order)
+}
+
+func TestValidateFencingTokenTx_AtomicLock(t *testing.T) {
+	repo := setupTestDB(t)
+	ctx := context.Background()
+	partition := "test-partition-fencing"
+
+	// 1. 預先建立一筆 Leader Lock 記錄 (模擬 Elector 的結果)
+	expireTime := time.Now().Add(10 * time.Second).UnixMilli()
+	_, err := repo.Pool().Exec(ctx, `
+		INSERT INTO partition_leader_locks (partition, leader_id, fencing_token, expires_at)
+		VALUES ($1, 'test-instance', 10, $2)
+		ON CONFLICT (partition) DO UPDATE SET fencing_token = 10, expires_at = $2
+	`, partition, expireTime)
+	require.NoError(t, err)
+
+	// 2. 測試傳入的 Token < 10 (模擬殭屍)
+	err = repo.ExecTx(ctx, func(txCtx context.Context) error {
+		valid, err := repo.ValidateFencingTokenTx(txCtx, partition, 5)
+		require.NoError(t, err)
+		assert.False(t, valid, "殭屍 Token (=5) 小於資料庫內的 10，應返回 false")
+		return nil
+	})
+	require.NoError(t, err)
+
+	// 3. 測試傳入的 Token == 10 (模擬當前合法 Leader)
+	err = repo.ExecTx(ctx, func(txCtx context.Context) error {
+		valid, err := repo.ValidateFencingTokenTx(txCtx, partition, 10)
+		require.NoError(t, err)
+		assert.True(t, valid, "當前 Leader 的 Token (=10) 等於資料庫，應通過")
+		return nil
+	})
+	require.NoError(t, err)
+
+	// 清理
+	repo.Pool().Exec(ctx, `DELETE FROM partition_leader_locks WHERE partition = $1`, partition)
 }
