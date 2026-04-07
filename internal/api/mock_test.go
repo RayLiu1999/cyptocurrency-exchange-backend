@@ -19,6 +19,11 @@ func (m *MockOrderService) PlaceOrder(ctx context.Context, order *domain.Order) 
 	return args.Error(0)
 }
 
+func (m *MockOrderService) BatchPlaceOrders(ctx context.Context, orders []*domain.Order) error {
+	args := m.Called(ctx, orders)
+	return args.Error(0)
+}
+
 func (m *MockOrderService) CancelOrder(ctx context.Context, orderID, userID uuid.UUID) error {
 	args := m.Called(ctx, orderID, userID)
 	return args.Error(0)

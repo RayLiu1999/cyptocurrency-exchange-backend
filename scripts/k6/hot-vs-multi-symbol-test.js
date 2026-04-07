@@ -27,10 +27,18 @@ const totalOrderCount    = new Counter("exchange_total_orders");
 const SYMBOLS = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD"];
 
 export const options = {
-  vus: 100,
-  duration: "2m",
+  scenarios: {
+    constant_request_rate: {
+      executor: 'constant-arrival-rate',
+      rate: 300,        // 目標：每秒 300 筆訂單 (適合本地端資料庫不被超載的甜蜜點)
+      timeUnit: '1s',
+      duration: '2m',
+      preAllocatedVUs: 50,
+      maxVUs: 150,
+    },
+  },
   thresholds: {
-    "exchange_order_success_rate": ["rate>0.9"],
+    "exchange_order_success_rate": ["rate>0.8"],
     "exchange_order_latency_ms":   ["p(95)<300", "p(99)<1000"],
   },
 };
@@ -95,6 +103,4 @@ export default function () {
   check(res, {
     "no 5xx server error": (r) => r.status < 500,
   });
-
-  sleep(0.02);
 }

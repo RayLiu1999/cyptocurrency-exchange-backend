@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/RayLiu1999/exchange/internal/domain"
@@ -59,13 +60,75 @@ func (h *Handler) PlaceOrder(c *gin.Context) {
 	}
 
 	if err := h.orderSvc.PlaceOrder(c.Request.Context(), order); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		if errors.Is(err, domain.ErrInsufficientFunds) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
 		return
 	}
 
 	// 202 Accepted：訂單已接受並持久化，撮合與結算透過 Kafka 非同步完成
 	c.JSON(http.StatusAccepted, gin.H{
 		"order_id": order.ID,
+	})
+}
+
+// BatchPlaceOrders 批次下單
+func (h *Handler) BatchPlaceOrders(c *gin.Context) {
+	var reqs []placeOrderRequest
+	if err := c.ShouldBindJSON(&reqs); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(reqs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "empty batch"})
+		return
+	}
+
+	orders := make([]*domain.Order, 0, len(reqs))
+	for _, req := range reqs {
+		if err := validatePlaceOrderRequest(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		userID, err := uuid.Parse(req.UserID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user_id"})
+			return
+		}
+		side, err := domain.SideFromString(req.Side)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		orderType, err := domain.TypeFromString(req.Type)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		orders = append(orders, &domain.Order{
+			UserID:   userID,
+			Symbol:   req.Symbol,
+			Side:     side,
+			Type:     orderType,
+			Price:    req.Price,
+			Quantity: req.Quantity,
+		})
+	}
+
+	if err := h.orderSvc.BatchPlaceOrders(c.Request.Context(), orders); err != nil {
+		if errors.Is(err, domain.ErrInsufficientFunds) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"message": "batch accepted",
+		"count":   len(orders),
 	})
 }
 

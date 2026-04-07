@@ -65,6 +65,58 @@ func (r *PostgresRepository) LockFunds(ctx context.Context, userID uuid.UUID, cu
 	return nil
 }
 
+func (r *PostgresRepository) BatchLockFunds(ctx context.Context, lockedFunds map[uuid.UUID]map[string]decimal.Decimal) error {
+	executor := r.getExecutor(ctx)
+
+	// 擷取所有 UserID 並排序以避免行鎖死結 (Deadlock)
+	userIDs := make([]uuid.UUID, 0, len(lockedFunds))
+	for uid := range lockedFunds {
+		userIDs = append(userIDs, uid)
+	}
+	// uuid 轉字串排序
+	for i := 0; i < len(userIDs); i++ {
+		for j := i + 1; j < len(userIDs); j++ {
+			if userIDs[i].String() > userIDs[j].String() {
+				userIDs[i], userIDs[j] = userIDs[j], userIDs[i]
+			}
+		}
+	}
+
+	now := time.Now().UnixMilli()
+
+	for _, uid := range userIDs {
+		currencies := lockedFunds[uid]
+		curKeys := make([]string, 0, len(currencies))
+		for cur := range currencies {
+			curKeys = append(curKeys, cur)
+		}
+		// 幣種也排序
+		for i := 0; i < len(curKeys); i++ {
+			for j := i + 1; j < len(curKeys); j++ {
+				if curKeys[i] > curKeys[j] {
+					curKeys[i], curKeys[j] = curKeys[j], curKeys[i]
+				}
+			}
+		}
+
+		for _, cur := range curKeys {
+			amount := currencies[cur]
+			query := `
+				UPDATE accounts 
+				SET balance = balance - $1, locked = locked + $1, updated_at = $4
+				WHERE user_id = $2 AND currency = $3 AND balance >= $1`
+			tag, err := executor.Exec(ctx, query, amount, uid, cur, now)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 0 {
+				return domain.ErrInsufficientFunds
+			}
+		}
+	}
+	return nil
+}
+
 func (r *PostgresRepository) UnlockFunds(ctx context.Context, userID uuid.UUID, currency string, amount decimal.Decimal) error {
 	executor := r.getExecutor(ctx)
 	query := `

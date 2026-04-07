@@ -80,10 +80,10 @@ func (s *Service) RechargeTestUser(ctx context.Context, userID uuid.UUID) error 
 	base, quote := "BTC", "USD"
 
 	return s.txManager.ExecTx(ctx, func(ctx context.Context) error {
-		if err := s.accountRepo.UpdateBalance(ctx, userID, base, decimal.NewFromFloat(10)); err != nil {
+		if err := s.accountRepo.UpdateBalance(ctx, userID, base, decimal.NewFromFloat(10000)); err != nil {
 			return err
 		}
-		if err := s.accountRepo.UpdateBalance(ctx, userID, quote, decimal.NewFromFloat(100000)); err != nil {
+		if err := s.accountRepo.UpdateBalance(ctx, userID, quote, decimal.NewFromFloat(100000000)); err != nil {
 			return err
 		}
 		return nil

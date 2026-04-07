@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -64,17 +65,30 @@ func main() {
 		logger.Log.Warn("gateway: Redis 不可用，安全 middleware 退回記憶體模式", zap.Error(redisErr))
 	}
 
+	publicRateLimit := 200
+	if val := os.Getenv("RATE_LIMIT_PUBLIC"); val != "" {
+		if parsed, err := strconv.Atoi(val); err == nil {
+			publicRateLimit = parsed
+		}
+	}
+
+	privateRateLimit := 100
+	if val := os.Getenv("RATE_LIMIT_PRIVATE"); val != "" {
+		if parsed, err := strconv.Atoi(val); err == nil {
+			privateRateLimit = parsed
+		}
+	}
+
 	var publicLimiter middleware.RateLimiter
 	var privateLimiter middleware.RateLimiter
 	var idempStore middleware.IdempotencyStore
 	if redisClient != nil {
-		// 為了測試 Spike Test 的限流效果，將上限調低 (100/sec 代表超過此頻率會噴 429)
-		publicLimiter = middleware.NewRedisRateLimiter(redisClient, 200, time.Minute)
-		privateLimiter = middleware.NewRedisRateLimiter(redisClient, 100, time.Second)
+		publicLimiter = middleware.NewRedisRateLimiter(redisClient, publicRateLimit, time.Second)
+		privateLimiter = middleware.NewRedisRateLimiter(redisClient, privateRateLimit, time.Second)
 		idempStore = middleware.NewRedisIdempotencyStore(redisClient)
 	} else {
-		publicLimiter = middleware.NewMemoryRateLimiter(5, 200, 10*time.Minute)
-		privateLimiter = middleware.NewMemoryRateLimiter(100, 100, 10*time.Minute)
+		publicLimiter = middleware.NewMemoryRateLimiter(5, publicRateLimit, 10*time.Minute)
+		privateLimiter = middleware.NewMemoryRateLimiter(100, privateRateLimit, 10*time.Minute)
 		idempStore = middleware.NewMemoryIdempotencyStore()
 	}
 

@@ -8,13 +8,19 @@ const e2eLatency = new Trend("exchange_e2e_latency_ms", true);
 const orderSuccessRate = new Rate("exchange_order_success_rate");
 const wsMessagesReceived = new Counter("exchange_ws_messages_received");
 
+// 動態讀取環境變數，預設為 100
+const rate = __ENV.rate ? parseInt(__ENV.rate) : 100;
+
 export const options = {
   scenarios: {
     // 場景 A：下單產生流量
     orderers: {
-      executor: "constant-vus",
-      vus: 10,
+      executor: "constant-arrival-rate",
+      rate: rate,
+      timeUnit: "1s",
       duration: "1m",
+      preAllocatedVUs: 20,
+      maxVUs: 100,
       exec: "sendOrders",
     },
     // 場景 B：WebSocket 監聽端到端延遲
@@ -26,8 +32,8 @@ export const options = {
     },
   },
   thresholds: {
-    "exchange_order_success_rate": ["rate>0.95"],
-    "exchange_e2e_latency_ms": ["p(95)<200"], // 期望 P95 的端到端延遲在 200ms 以下
+    exchange_order_success_rate: ["rate>0.95"],
+    exchange_e2e_latency_ms: ["p(95)<200"], // 期望 P95 的端到端延遲在 200ms 以下
   },
 };
 
@@ -47,21 +53,27 @@ export function sendOrders() {
     }
   }
 
+  const price = (50000 + (Math.random() * 400 - 200)).toFixed(2).toString();
+
   const payload = JSON.stringify({
     user_id: ordererUserId,
     symbol: "BTC-USD",
     side: Math.random() > 0.5 ? "BUY" : "SELL",
-    type: "MARKET", // 使用市價單保證產生交易與推播
+    type: "LIMIT", // 改用限價單，避免被撮合引擎因空單簿直接 Reject
+    price: price,
     quantity: "0.01",
   });
 
   const params = { headers: { "Content-Type": "application/json" } };
-  
+
   let res = http.post(`${baseUrl}/orders`, payload, params);
 
   // === 資金循環 (Recharge) 機制 ===
   if (res.status === 400) {
-    const rechargeRes = http.post(`${baseUrl}/test/recharge/${ordererUserId}`, null);
+    const rechargeRes = http.post(
+      `${baseUrl}/test/recharge/${ordererUserId}`,
+      null,
+    );
     if (rechargeRes.status === 200) {
       res = http.post(`${baseUrl}/orders`, payload, params);
     }
@@ -70,24 +82,23 @@ export function sendOrders() {
   const success = res.status === 201 || res.status === 202;
   orderSuccessRate.add(success);
 
-  check(res, { "order: accepted": (r) => r.status === 201 || r.status === 202 });
-  
-  // 避免將本機 CPU 打滿
-  sleep(0.05);
+  check(res, {
+    "order: accepted": (r) => r.status === 201 || r.status === 202,
+  });
 }
 
 export function watchMarket() {
   const res = ws.connect(wsUrl, {}, function (socket) {
     socket.on("message", (msg) => {
       wsMessagesReceived.add(1);
-      
+
       try {
         const payload = JSON.parse(msg);
-        
+
         // 捕捉 order_update 推播事件
         if (payload.type === "order_update") {
           const order = payload.data;
-          
+
           // 計算端到端延遲 (End-to-End Latency)
           // T1: 訂單在 DB 建立的時間 (created_at)
           // T2: 經歷 DB -> Outbox -> Kafka -> Matching Engine -> Kafka -> WS Server -> K6 (Date.now())
@@ -95,8 +106,9 @@ export function watchMarket() {
           const createdAt = new Date(order.created_at).getTime();
           const now = Date.now();
           const latency = now - createdAt;
-          
-          if (latency > 0 && latency < 5000) { // 濾掉極端異常值
+
+          if (latency > 0 && latency < 5000) {
+            // 濾掉極端異常值
             e2eLatency.add(latency);
           }
         }
@@ -105,7 +117,9 @@ export function watchMarket() {
       }
     });
 
-    socket.setTimeout(() => { socket.close(); }, 60000);
+    socket.setTimeout(() => {
+      socket.close();
+    }, 60000);
   });
 
   check(res, { "ws: connected": (r) => r && r.status === 101 });

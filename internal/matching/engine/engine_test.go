@@ -493,3 +493,28 @@ func TestEngine_SelfTrade_Prevented(t *testing.T) {
 	// 因為觸發了 Cancel Newest 的 STP 機制，買單的 Quantity 被設為 0，所以不應進入訂單簿
 	assert.Equal(t, 0, engine.OrderBook().BidCount(), "被拒絕的買單因 STP 被取消，不進入訂單簿")
 }
+
+// ============================================================
+// 效能壓力測試 (Benchmark)
+// 對標 AXS 專案的 Processor Throughput
+// ============================================================
+
+func BenchmarkEngineMatch(b *testing.B) {
+	engine := NewEngine("BTC-USD")
+	makerID := uuid.New()
+	takerID := uuid.New()
+	
+	// 為了測量「純粹的引擎吞吐量」，我們預先丟一個超巨大的 Maker 單進去，
+	// 然後讓 N 個 Taker 單不斷去撞擊它。
+	// 這排除了 OrderBook 被吃光的 Edge Case，專注於測量核心演算法效能。
+	bigSell := NewOrder(uuid.New(), makerID, SideSell, decimal.NewFromInt(50000), decimal.NewFromInt(int64(b.N+1000)))
+	engine.Process(bigSell)
+
+	// 重置計時器，排除初始化時間
+	b.ResetTimer()
+	
+	for i := 0; i < b.N; i++ {
+		buyOrder := NewOrder(uuid.New(), takerID, SideBuy, decimal.NewFromInt(50000), decimal.NewFromInt(1))
+		engine.Process(buyOrder)
+	}
+}

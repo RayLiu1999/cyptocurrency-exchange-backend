@@ -56,7 +56,7 @@ export default function () {
   // === 資金循環 (Recharge) 機制 ===
   // 如果收到 400 Bad Request，極大可能是餘額不足（因為一直下單又沒完全抵銷）。
   // 為了讓壓測能「真正跑到最後」而不被餘額卡的假性瓶頸阻擋，我們動態充值。
-  if (res.status === 400) {
+  if (res.status >= 400) {
     const rechargeRes = http.post(`${baseUrl}/test/recharge/${userId}`, null);
     if (rechargeRes.status === 200) {
       // 充值成功後再重送一次該筆訂單

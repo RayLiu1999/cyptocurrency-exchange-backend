@@ -1,12 +1,12 @@
-# 壓力測試腳本說明
+# 加密貨幣交易所 - K6 壓力測試與架構驗證腳本
 
-本目錄收錄針對加密貨幣交易所後端設計的 k6 壓力測試腳本，每個場景都有明確的「測試目的」與「預期結論」，確保壓測結果能夠**支撐架構決策**，而非只是跑出一份通過報告。
+本目錄收錄專為本交易所後端架構設計的 K6 測試腳本。從資深後端與分散式系統的觀點出發，這些腳本不僅僅是為了「製造假流量」，每一支腳本的存在都是為了**驗證特定的架構決策與系統隔離性**，例如：API Gateway 的限流反壓機制、Kafka 分區的平行處理能力、以及 In-Memory 引擎的極限吞吐量。
 
 ## 執行環境
 
 ```bash
 # 確保後端服務已啟動
-make prod-up  # 或 docker-compose up
+make test-up
 
 # 安裝 k6（macOS）
 brew install k6
@@ -14,94 +14,71 @@ brew install k6
 
 ---
 
-## 場景總覽
+## 腳本分類與資深架構觀點 (Architecture Perspectives)
 
-| 腳本 | 場景目的 | 核心問題 |
-|:---|:---|:---|
-| `smoke-test.js` | 環境健康檢查 | 服務有沒有跑起來？ |
-| `load-test.js` | 基礎負載測試 | 100 VU 下 P95 < 100ms 嗎？ |
-| `spike-test.js` | 突發尖峰測試（限流驗證）| 800 VU 衝入時系統能優雅降級嗎？ |
-| `ws-fanout-test.js` | WebSocket 廣播基礎測試 | 2000 連線能否全部建立成功？ |
-| `matching-engine-capacity-test.js` | **撮合引擎容量拐點分析** | TPS 到多少時第一個瓶頸出現？在哪層？ |
-| `hot-vs-multi-symbol-test.js` | **熱門交易對 vs 多交易對吞吐對比** | Kafka Partition 分散能提升多少吞吐量？ |
-| `market-storm-test.js` | **行情風暴（下單 + WebSocket 同時壓測）** | WebSocket 廣播會拖慢下單 P95 嗎？ |
+我們將測試場景分為四大象限，明確區分每一支腳本的用途與棄用點。
+
+### 1. 核心邏輯與交付防線 (CI/CD 必備)
+
+這類腳本不追求極限 QPS，而是確保系統關鍵功能未被破壞。
+
+| 腳本            | 架構驗證目的                                                                                                                                            | 狀態        |
+| :-------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------ | :---------- |
+| `smoke-test.js` | **端到端業務邏輯驗證** (E2E Sanity Check)。模擬單一散戶完整生命週期 (註冊 -> 入金 -> 下單 -> 查單 -> 撤單)，確保微服務間的狀態轉換一致，無 regression。 | ✅ **必備** |
+
+### 2. 邊緣防禦與入口吞吐量 (Ingress & Gateway)
+
+驗證第一道防線（API Gateway / Nginx / 限流器）的防護能力與多工寫入極限。
+
+| 腳本                    | 架構驗證目的                                                                                                                                                               | 狀態        |
+| :---------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------- |
+| `load-test.js`          | **常態負載測試**。針對單張下單 API `/orders` 進行 100 VU 壓測。驗證連線池是否耗盡，以及一般 Web/App 散戶帶來的常規壓力。                                                   | ✅ **必備** |
+| `market-maker-batch.js` | **造市商極限批次寫入 (Ingestion Batching)**。針對 `/orders/batch` 進行測試，繞開 HTTP 次數與資料庫單筆 Tx 成本。展現系統最大 IO 寫入上限，通常能超過單筆入金數十倍的 QPS。 | ✅ **必備** |
+| `spike-test.js`         | **突刺流量限流防護 (Rate Limit Resilience)**。模擬「馬斯克發推文 / 行情暴跌」時瞬間湧入超越 10 倍的流量。極度重要，驗證系統是「優雅回傳 429」還是「直接 500 OOM 崩潰」。   | ✅ **必備** |
+
+### 3. 微服務深度機制與撮合引擎 (Matching Engine & Kafka)
+
+往系統深處打，找出下游微服務與訊息佇列的處理瓶頸。
+
+| 腳本                               | 架構驗證目的                                                                                                                                                               | 狀態                 |
+| :--------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------- |
+| `matching-engine-capacity-test.js` | **撮合引擎單點容量測試**。集中火力轟炸單一交易對（如 BTC-USD），逼出 Kafka 單一 Partition 與 Matching Engine 單一 Goroutine 的物理極限。找出「拐點（Lag 出現的時間點）」。 | ✅ **必備**          |
+| `hot-vs-multi-symbol-test.js`      | **Kafka Partition 負載切分驗證**。對比「單一熱門幣種」與「分散多種幣種」下的 TPS 落差。藉此**證明**採用 Symbol 進行 Hash Routing 的設計確切有功效。                        | ✅ **必備 (展示用)** |
+
+### 4. 資源隔離與端到端延遲 (Isolation & E2E Latency)
+
+測量從「使用者點下按鈕」到「瀏覽器收到 WebSocket 成交推播」的真實物理體感時間。
+
+| 腳本                   | 架構驗證目的                                                                                                                                                                    | 狀態        |
+| :--------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :---------- |
+| `market-storm-test.js` | **模組資源隔離 (Resource Isolation)**。同時開啟數千個 WS 連線且狂下訂單。用於證明 Order Service (寫入) 與 Market Data Service (廣播) 在 CPU/Memory 上互不影響。                 | ✅ **必備** |
+| `e2e-latency-test.js`  | **全鏈路延遲測試 (E2E Latency)**。將資料庫建立時間與收到 WS 推播的時間相減。這是 Event-Sourcing 架構的致命點：我們不關心 API 多快回 202，我們關心用戶要等幾秒才看的到單子成交！ | ✅ **必備** |
 
 ---
 
-## 深度場景詳解
+## 執行範例與壓測除錯指南
 
-### 場景 A：撮合引擎容量測試（matching-engine-capacity-test.js）
+### A. 為什麼我用壓測腳本跑出 0 筆成交 (Trades)？
+
+如果使用 `load-test.js` 壓出了 10 萬筆訂單，卻發現資料庫裡 0 筆成交：
+
+1. **價格過度發散**：因為腳本隨機生成的價格落差過大，無法交錯買賣單。
+2. **撮合嚴重延遲 (Lagging)**：大門開太寬，但您背後的引擎還是單執行緒、讀取資料庫。這不是 Error，這正是我們需要開發「記憶體撮合引擎 (In-Memory Matching)」的最佳理由！
+
+### B. 重置污損的壓測資料庫
+
+在每次極限壓測後，系統會遺留大量的未完成訂單與鎖定金額，請必定執行清理：
 
 ```bash
-# 打 Gateway（完整鏈路）
-BASE_URL=http://localhost:8100/api/v1 k6 run scripts/k6/matching-engine-capacity-test.js
+make db-fresh
 ```
 
-**測試邏輯**：VU 從 10 → 50 → 100 → 200 逐步爬升，持續下限價單，觀察 P95/P99 延遲何時開始退化。
-
-**自訂指標**：
-| 指標 | 說明 |
-|:---|:---|
-| `exchange_order_success_rate` | 有效訂單比率（排除 429 限流）|
-| `exchange_order_p99_latency_ms` | 下單 P99 延遲（找出尾延遲壓力點）|
-| `exchange_order_total_count` | 總下單數（推算整體 TPS）|
-
-**預期結論**：P99 在某個 VU 下出現崖式上升，同時觀察 Grafana 的 `exchange_db_wait_count_total`，可定位瓶頸在 DB 連線池還是 Kafka 背壓。
-
----
-
-### 場景 B：熱門交易對 vs 多交易對吞吐對比（hot-vs-multi-symbol-test.js）
+### C. 執行精確路徑測試
 
 ```bash
-# 跑 1：全部集中在 BTC-USD（熱門模式）
-SYMBOL_MODE=hot k6 run scripts/k6/hot-vs-multi-symbol-test.js
+# 驗證批次寫入效能 (測出 40k+ TPS 的關鍵)
+k6 run scripts/k6/market-maker-batch.js
 
-# 跑 2：分散到 5 個交易對（多 Kafka Partition）
-SYMBOL_MODE=multi k6 run scripts/k6/hot-vs-multi-symbol-test.js
-```
-
-**測試邏輯**：固定 100 VU × 2 分鐘，唯一差異是 Symbol 選擇策略。
-
-**預期結論**：
-> "多交易對（5 Symbols）模式下，P95 延遲比單一 BTC-USD 模式低 XX%，
-> 驗證了 Kafka Partition Key = Symbol 的設計能有效分散熱點，
-> 避免單一熱門交易對成為全系統瓶頸。"
-
----
-
-### 場景 C：行情風暴測試（market-storm-test.js）
-
-```bash
-WS_URL=ws://localhost:8100/ws BASE_URL=http://localhost:8100/api/v1 \
-  k6 run scripts/k6/market-storm-test.js
-```
-
-**測試邏輯**：兩個 k6 scenario 同時跑：
-- `orderers`：50 VU 持續下單，製造行情變化觸發廣播
-- `watchers`：1000 個 WebSocket 連線，接收廣播訊息並計數
-
-**自訂指標**：
-| 指標 | 說明 |
-|:---|:---|
-| `exchange_ws_connect_success_rate` | WebSocket 連線成功率 |
-| `exchange_ws_messages_received` | 廣播訊息接收總數（計算廣播 TPS）|
-| `exchange_order_latency_ms` | 下單延遲（驗證廣播不影響下單效能）|
-
-**預期結論**：
-> "在 1,000 個 WebSocket 長連線同時接收行情的情況下，
-> 下單 P95 延遲仍維持在 300ms 以下，
-> 驗證 Market Data Service 的資源隔離設計有效，即便行情風暴也不拖累交易核心。"
-
----
-
-## 截圖存放位置
-
-壓測完成後，將 k6 終端機輸出截圖存放至：
-
-```
-docs/testing/stresstest-results/
-├── scenario-A-capacity-test.png
-├── scenario-B-hot-symbol.png
-├── scenario-B-multi-symbol.png
-└── scenario-C-market-storm.png
+# 測實驗證端到端真實延遲
+k6 run scripts/k6/e2e-latency-test.js
 ```

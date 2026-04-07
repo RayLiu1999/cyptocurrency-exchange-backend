@@ -2,9 +2,14 @@ package outbox
 
 import (
 	"context"
+	"fmt"
 	"time"
 
+	github_com_jackc_pgx_v5_pgconn "github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/RayLiu1999/exchange/internal/infrastructure/db"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -25,7 +30,16 @@ func (r *Repository) Insert(ctx context.Context, msg *Message) error {
 	msg.CreatedAt = time.Now().UnixMilli()
 	msg.Status = StatusPending
 
-	_, err := r.pool.Exec(ctx, `
+	var executor interface {
+		Exec(ctx context.Context, sql string, arguments ...any) (commandTag github_com_jackc_pgx_v5_pgconn.CommandTag, err error)
+	}
+	if tx := db.GetTx(ctx); tx != nil {
+		executor = tx
+	} else {
+		executor = r.pool
+	}
+
+	_, err := executor.Exec(ctx, `
 		INSERT INTO outbox_messages
 			(id, aggregate_id, aggregate_type, topic, partition_key, payload, status, retry_count, created_at, published_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
@@ -39,6 +53,38 @@ func (r *Repository) Insert(ctx context.Context, msg *Message) error {
 		msg.RetryCount,
 		msg.CreatedAt,
 		msg.PublishedAt,
+	)
+	return err
+}
+
+// BatchInsert 批次插入 Outbox 記錄（使用 CopyFrom，必須在 tx 中）
+func (r *Repository) BatchInsert(ctx context.Context, msgs []*Message) error {
+	if len(msgs) == 0 {
+		return nil
+	}
+	tx := db.GetTx(ctx)
+	if tx == nil {
+		// 回退機制（雖然強烈建議在 transaction 內執行）
+		return fmt.Errorf("BatchInsert must be called within ExecTx")
+	}
+
+	now := time.Now().UnixMilli()
+	rows := make([][]any, 0, len(msgs))
+	for _, msg := range msgs {
+		msg.ID, _ = uuid.NewV7()
+		msg.CreatedAt = now
+		msg.Status = StatusPending
+		rows = append(rows, []any{
+			msg.ID, msg.AggregateID, msg.AggregateType, msg.Topic, msg.PartitionKey,
+			msg.Payload, msg.Status, msg.RetryCount, msg.CreatedAt, msg.PublishedAt,
+		})
+	}
+
+	_, err := tx.CopyFrom(
+		ctx,
+		pgx.Identifier{"outbox_messages"},
+		[]string{"id", "aggregate_id", "aggregate_type", "topic", "partition_key", "payload", "status", "retry_count", "created_at", "published_at"},
+		pgx.CopyFromRows(rows),
 	)
 	return err
 }
@@ -78,12 +124,25 @@ func (r *Repository) FetchPending(ctx context.Context, batchSize int, gracePerio
 	return msgs, rows.Err()
 }
 
-// MarkPublished 將已成功 Produce 到 Kafka 的訊息進行物理刪除
+// MarkPublished 將已成功 Produce 到 Kafka 的訊息進行物理刪除（單筆）
 func (r *Repository) MarkPublished(ctx context.Context, id uuid.UUID) error {
 	_, err := r.pool.Exec(ctx, `
 		DELETE FROM outbox_messages
 		WHERE id = $1`,
 		id,
+	)
+	return err
+}
+
+// MarkPublishedBatch 將已成功 Produce 到 Kafka 的多筆訊息進行批次物理刪除
+func (r *Repository) MarkPublishedBatch(ctx context.Context, ids []uuid.UUID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := r.pool.Exec(ctx, `
+		DELETE FROM outbox_messages
+		WHERE id = ANY($1)`,
+		ids,
 	)
 	return err
 }

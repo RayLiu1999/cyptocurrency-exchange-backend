@@ -21,13 +21,22 @@ const orderP99Latency = new Trend("exchange_order_p99_latency_ms", true);
 const orderThroughput = new Counter("exchange_order_total_count");
 
 export const options = {
-  stages: [
-    { duration: "30s", target: 10 },   // 暖機
-    { duration: "1m",  target: 50 },   // 中等負載
-    { duration: "1m",  target: 100 },  // 高負載：觀察 P99 是否開始退化
-    { duration: "1m",  target: 200 },  // 極限負載：找出第一個瓶頸
-    { duration: "30s", target: 0 },
-  ],
+  scenarios: {
+    capacity_test: {
+      executor: 'ramping-arrival-rate',
+      startRate: 50,
+      timeUnit: '1s',
+      preAllocatedVUs: 50,
+      maxVUs: 200,
+      stages: [
+        { duration: "30s", target: 50 },   // 暖機: 50 TPS
+        { duration: "1m",  target: 150 },  // 中等負載: 150 TPS
+        { duration: "1m",  target: 300 },  // 高負載: 300 TPS (探索 DB 與 Kafka 邊界)
+        { duration: "1m",  target: 500 },  // 極限負載: 500 TPS
+        { duration: "30s", target: 0 },
+      ],
+    },
+  },
   thresholds: {
     // 核心 SLA 門檻
     "exchange_order_success_rate":   ["rate>0.95"],  // 95% 成功率（不含 429）
@@ -97,6 +106,4 @@ export default function () {
     "order accepted or rate-limited": (r) =>
       r.status === 201 || r.status === 202 || r.status === 429,
   });
-
-  sleep(0.05);
 }

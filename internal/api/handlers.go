@@ -44,6 +44,7 @@ func (h *Handler) RegisterRoutes(router gin.IRouter) {
 	orders := router.Group("/")
 	{
 		orders.POST("/orders", h.PlaceOrder)
+		orders.POST("/orders/batch", h.BatchPlaceOrders)
 	}
 }
 
@@ -76,5 +77,6 @@ func (h *Handler) RegisterRoutesWithMiddleware(router gin.IRouter, publicLimiter
 	orders.Use(middleware.IdempotencyMiddleware(idempStore, 24*time.Hour))
 	{
 		orders.POST("/orders", h.PlaceOrder)
+		orders.POST("/orders/batch", h.BatchPlaceOrders)
 	}
 }

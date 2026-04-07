@@ -2,9 +2,12 @@ package repository
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/RayLiu1999/exchange/internal/domain"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/db"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // --- OrderRepository Implementation ---
@@ -19,6 +22,34 @@ func (r *PostgresRepository) CreateOrder(ctx context.Context, order *domain.Orde
 		order.ID, order.UserID, order.Symbol, order.Side, order.Type,
 		order.Price, order.Quantity, order.FilledQuantity, order.Status,
 		order.CreatedAt, order.UpdatedAt)
+	return err
+}
+
+func (r *PostgresRepository) BatchCreateOrders(ctx context.Context, orders []*domain.Order) error {
+	if len(orders) == 0 {
+		return nil
+	}
+	
+	tx := db.GetTx(ctx)
+	if tx == nil {
+		return fmt.Errorf("BatchCreateOrders must be called within ExecTx")
+	}
+
+	rows := make([][]any, 0, len(orders))
+	for _, order := range orders {
+		rows = append(rows, []any{
+			order.ID, order.UserID, order.Symbol, order.Side, order.Type,
+			order.Price, order.Quantity, order.FilledQuantity, order.Status,
+			order.CreatedAt, order.UpdatedAt,
+		})
+	}
+
+	_, err := tx.CopyFrom(
+		ctx,
+		pgx.Identifier{"orders"},
+		[]string{"id", "user_id", "symbol", "side", "type", "price", "quantity", "filled_quantity", "status", "created_at", "updated_at"},
+		pgx.CopyFromRows(rows),
+	)
 	return err
 }
 

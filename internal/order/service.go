@@ -27,6 +27,9 @@ type Service struct {
 	eventBus     domain.EventPublisher
 	rawPublisher outbox.Publisher // 熱路徑直發 Kafka 用（與 Outbox Worker 共用 Kafka Producer）
 	outboxRepo   *outbox.Repository
+
+	// Micro-batching 所使用的通道，用來收集發送成功待刪除的 Outbox ID
+	publishedMsgChan chan uuid.UUID
 }
 
 func NewService(
@@ -40,17 +43,62 @@ func NewService(
 	rawPublisher outbox.Publisher,
 	outboxRepo *outbox.Repository,
 ) *Service {
-	return &Service{
-		orderRepo:    orderRepo,
-		accountRepo:  accountRepo,
-		userRepo:     userRepo,
-		tradeRepo:    tradeRepo,
-		txManager:    txManager,
-		cacheRepo:    cacheRepo,
-		eventBus:     eventBus,
-		rawPublisher: rawPublisher,
-		outboxRepo:   outboxRepo,
+	s := &Service{
+		orderRepo:        orderRepo,
+		accountRepo:      accountRepo,
+		userRepo:         userRepo,
+		tradeRepo:        tradeRepo,
+		txManager:        txManager,
+		cacheRepo:        cacheRepo,
+		eventBus:         eventBus,
+		rawPublisher:     rawPublisher,
+		outboxRepo:       outboxRepo,
+		publishedMsgChan: make(chan uuid.UUID, 5000), // 提供 5000 筆的緩衝能力
 	}
+
+	// 啟動背景 Micro-batching worker 處理 Outbox 的秒刪邏輯
+	if s.outboxRepo != nil {
+		go s.batchMarkPublishedWorker()
+	}
+
+	return s
+}
+
+// batchMarkPublishedWorker 在背景定期將發送成功的 ID 批次物理刪除
+func (s *Service) batchMarkPublishedWorker() {
+	ticker := time.NewTicker(50 * time.Millisecond) // 每 50ms 聚集一次
+	defer ticker.Stop()
+
+	var batch []uuid.UUID
+	for {
+		select {
+		case id := <-s.publishedMsgChan:
+			batch = append(batch, id)
+			// 如果累積數量足夠多也可以提早觸發
+			if len(batch) >= 200 {
+				s.flushBatch(&batch)
+			}
+		case <-ticker.C:
+			s.flushBatch(&batch)
+		}
+	}
+}
+
+func (s *Service) flushBatch(batch *[]uuid.UUID) {
+	if len(*batch) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := s.outboxRepo.MarkPublishedBatch(ctx, *batch); err != nil {
+		logger.Log.Warn("[Service.batchMarkPublishedWorker] 批次標記 Outbox Published 失敗",
+			zap.Int("count", len(*batch)),
+			zap.Error(err),
+		)
+	}
+	// 重置 slice 但保留底層陣列容量
+	*batch = (*batch)[:0]
 }
 
 func (s *Service) PlaceOrder(ctx context.Context, order *domain.Order) (err error) {
@@ -151,16 +199,117 @@ func (s *Service) PlaceOrder(ctx context.Context, order *domain.Order) (err erro
 				)
 				return
 			}
-			// 熱路徑成功：標記 Published，Worker 輪詢時會跳過此訊息
-			markCtx, markCancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer markCancel()
-			if markErr := s.outboxRepo.MarkPublished(markCtx, msgID); markErr != nil {
-				logger.Log.Warn("[PlaceOrder] 標記 Outbox Published 失敗（訊息已成功送達 Kafka）",
-					zap.String("outbox_id", msgID.String()),
-					zap.Error(markErr),
-				)
+			// 熱路徑成功：不直接打 DB，而是放入 batch channel 交由背景 worker 批次刪除
+			select {
+			case s.publishedMsgChan <- msgID:
+			default:
+				// 若通道滿了，就放著不管，交由 Outbox Worker 冷路徑補掃刪除
+				logger.Log.Warn("[PlaceOrder] publishedMsgChan 已滿，交由冷路徑處理", zap.String("outbox_id", msgID.String()))
 			}
 		}(outboxMsg.ID, outboxMsg.Payload, outboxMsg.Topic, outboxMsg.PartitionKey)
+	}
+
+	return nil
+}
+
+func (s *Service) BatchPlaceOrders(ctx context.Context, orders []*domain.Order) (err error) {
+	if len(orders) == 0 {
+		return nil
+	}
+
+	start := time.Now()
+	defer func() {
+		metrics.ObserveOrder("batch", "UNKNOWN", "UNKNOWN", err, time.Since(start))
+	}()
+
+	now := time.Now().UnixMilli()
+	lockedFunds := make(map[uuid.UUID]map[string]decimal.Decimal)
+	var outboxMsgs []*outbox.Message
+
+	for _, order := range orders {
+		order.Symbol = strings.ToUpper(order.Symbol)
+		order.Price = order.Price.Round(8)
+		order.Quantity = order.Quantity.Round(8)
+
+		if order.Quantity.LessThanOrEqual(decimal.Zero) || (order.Type == domain.TypeLimit && order.Price.LessThanOrEqual(decimal.Zero)) {
+			return fmt.Errorf("無效的訂單參數")
+		}
+
+		currency, amount, calcErr := s.calculateLockAmount(order)
+		if calcErr != nil {
+			return fmt.Errorf("計算扣款金額失敗: %w", calcErr)
+		}
+
+		if lockedFunds[order.UserID] == nil {
+			lockedFunds[order.UserID] = make(map[string]decimal.Decimal)
+		}
+		lockedFunds[order.UserID][currency] = lockedFunds[order.UserID][currency].Add(amount)
+
+		newID, _ := uuid.NewV7()
+		order.ID = newID
+		order.Status = domain.StatusNew
+		order.FilledQuantity = decimal.Zero
+		order.CreatedAt = now
+		order.UpdatedAt = now
+
+		if s.outboxRepo != nil && s.eventBus != nil {
+			event := &domain.OrderPlacedEvent{
+				EventType:      domain.EventOrderPlaced,
+				Symbol:         order.Symbol,
+				OrderID:        order.ID,
+				UserID:         order.UserID,
+				Side:           order.Side,
+				Type:           order.Type,
+				Price:          order.Price,
+				Quantity:       order.Quantity,
+				CreatedAt:      order.CreatedAt,
+				AmountLocked:   amount,
+				LockedCurrency: currency,
+			}
+			payload, _ := outbox.MarshalPayload(event)
+			outboxMsgs = append(outboxMsgs, &outbox.Message{
+				AggregateID:   order.ID.String(),
+				AggregateType: "order_placed",
+				Topic:         domain.TopicOrders,
+				PartitionKey:  order.Symbol,
+				Payload:       payload,
+			})
+		}
+	}
+
+	err = s.txManager.ExecTx(ctx, func(txCtx context.Context) error {
+		if err := s.accountRepo.BatchLockFunds(txCtx, lockedFunds); err != nil {
+			return fmt.Errorf("批次鎖定期資金失敗: %w", err)
+		}
+		if err := s.orderRepo.BatchCreateOrders(txCtx, orders); err != nil {
+			return fmt.Errorf("批次建立訂單失敗: %w", err)
+		}
+		if len(outboxMsgs) > 0 {
+			if err := s.outboxRepo.BatchInsert(txCtx, outboxMsgs); err != nil {
+				return fmt.Errorf("批次寫入 Outbox 失敗: %w", err)
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	// 熱路徑直發
+	if s.rawPublisher != nil {
+		for _, msg := range outboxMsgs {
+			go func(m *outbox.Message) {
+				hotCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				if pubErr := s.rawPublisher.PublishRaw(hotCtx, m.Topic, m.PartitionKey, m.Payload); pubErr == nil {
+					select {
+					case s.publishedMsgChan <- m.ID:
+					default:
+					}
+				}
+			}(msg)
+		}
 	}
 
 	return nil
@@ -231,13 +380,11 @@ func (s *Service) CancelOrder(ctx context.Context, orderID, userID uuid.UUID) er
 				)
 				return
 			}
-			markCtx, markCancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer markCancel()
-			if markErr := s.outboxRepo.MarkPublished(markCtx, msgID); markErr != nil {
-				logger.Log.Warn("[CancelOrder] 標記 Outbox Published 失敗（訊息已成功送達 Kafka）",
-					zap.String("outbox_id", msgID.String()),
-					zap.Error(markErr),
-				)
+			// 熱路徑成功：放入 batch channel
+			select {
+			case s.publishedMsgChan <- msgID:
+			default:
+				logger.Log.Warn("[CancelOrder] publishedMsgChan 已滿，交由冷路徑處理", zap.String("outbox_id", msgID.String()))
 			}
 		}(cancelOutboxMsg.ID, cancelOutboxMsg.Payload, cancelOutboxMsg.Topic, cancelOutboxMsg.PartitionKey)
 	}

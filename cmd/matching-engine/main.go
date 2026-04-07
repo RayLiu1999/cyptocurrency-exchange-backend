@@ -9,8 +9,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
 	"github.com/RayLiu1999/exchange/internal/domain"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/db"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/election"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/kafka"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
@@ -20,7 +20,6 @@ import (
 	"github.com/RayLiu1999/exchange/internal/matching/engine"
 	"github.com/RayLiu1999/exchange/internal/repository"
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
 
@@ -37,7 +36,9 @@ func main() {
 	if dbURL == "" {
 		logger.Log.Fatal("matching-engine: DATABASE_URL 環境變數未設定")
 	}
-	pool, err := pgxpool.New(context.Background(), dbURL)
+	dbCfg := db.DefaultDBConfig(dbURL)
+	dbCfg.MaxOpenConns = 20 //撮合引擎資料庫操作極少(唯讀備份與選主)，20個即可
+	pool, err := db.NewPostgresPool(context.Background(), dbCfg)
 	if err != nil {
 		logger.Log.Fatal("matching-engine: 無法連接資料庫", zap.Error(err))
 	}

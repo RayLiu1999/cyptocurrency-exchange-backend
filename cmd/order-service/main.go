@@ -11,6 +11,7 @@ import (
 
 	"github.com/RayLiu1999/exchange/internal/api"
 	"github.com/RayLiu1999/exchange/internal/domain"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/db"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/kafka"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
@@ -19,7 +20,6 @@ import (
 	"github.com/RayLiu1999/exchange/internal/order"
 	"github.com/RayLiu1999/exchange/internal/repository"
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5/pgxpool"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 	"go.uber.org/zap"
@@ -37,7 +37,11 @@ func main() {
 	if dbURL == "" {
 		logger.Log.Fatal("order-service: DATABASE_URL 環境變數未設定")
 	}
-	pool, err := pgxpool.New(context.Background(), dbURL)
+	dbCfg := db.DefaultDBConfig(dbURL)
+	// 高併發連線池優化設定
+	dbCfg.MaxOpenConns = 150 // order-service 負責前台流量，分配較多連線
+	dbCfg.MaxIdleTime = 5 * time.Minute
+	pool, err := db.NewPostgresPool(context.Background(), dbCfg)
 	if err != nil {
 		logger.Log.Fatal("order-service: 無法連接資料庫", zap.Error(err))
 	}

@@ -3,8 +3,9 @@ package repository
 import (
 	"context"
 
-"github.com/RayLiu1999/exchange/internal/order"
-"github.com/RayLiu1999/exchange/internal/marketdata"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/db"
+	"github.com/RayLiu1999/exchange/internal/marketdata"
+	"github.com/RayLiu1999/exchange/internal/order"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -27,15 +28,11 @@ var _ order.TradeRepository = (*PostgresRepository)(nil)
 var _ marketdata.TradeRepository = (*PostgresRepository)(nil)
 var _ order.DBTransaction = (*PostgresRepository)(nil)
 
-type txKeyType struct{}
-
-var txKey = txKeyType{}
-
 // ExecTx 執行交易
 func (r *PostgresRepository) ExecTx(ctx context.Context, fn func(ctx context.Context) error) error {
 	return pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
 		// 將 tx 注入 context
-		txCtx := context.WithValue(ctx, txKey, tx)
+		txCtx := context.WithValue(ctx, db.TxKey, tx)
 		return fn(txCtx)
 	})
 }
@@ -97,7 +94,7 @@ type DBExecutor interface {
 
 // getExecutor 從 context 獲取 tx，如果沒有則返回 db pool
 func (r *PostgresRepository) getExecutor(ctx context.Context) DBExecutor {
-	if tx, ok := ctx.Value(txKey).(pgx.Tx); ok {
+	if tx := db.GetTx(ctx); tx != nil {
 		return tx
 	}
 	return r.db

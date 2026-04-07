@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/RayLiu1999/exchange/internal/domain"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/db"
 	"github.com/RayLiu1999/exchange/internal/matching/engine"
 	"github.com/RayLiu1999/exchange/internal/repository"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,7 +25,8 @@ func setupTestDB(t *testing.T) *repository.PostgresRepository {
 	if dbURL == "" {
 		dbURL = "postgres://postgres:123qwe@localhost:5432/exchange?sslmode=disable"
 	}
-	pool, err := pgxpool.New(context.Background(), dbURL)
+	dbCfg := db.DefaultDBConfig(dbURL)
+	pool, err := db.NewPostgresPool(context.Background(), dbCfg)
 	if err != nil {
 		t.Skipf("skip: cannot create pool (%v)", err)
 	}

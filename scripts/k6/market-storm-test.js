@@ -34,9 +34,12 @@ export const options = {
   scenarios: {
     // 場景 A：下單壓力（製造行情）
     orderers: {
-      executor:        "constant-vus",
-      vus:             50,
+      executor:        "constant-arrival-rate",
+      rate:            200,      // 每秒發送 200 單
+      timeUnit:        "1s",
       duration:        "2m",
+      preAllocatedVUs: 50,
+      maxVUs:          150,
       exec:            "sendOrders",
     },
     // 場景 B：WebSocket 廣播觀察者
@@ -109,7 +112,6 @@ export function sendOrders() {
   orderSuccessRate.add(res.status === 201 || res.status === 202);
 
   check(res, { "order: no 5xx": (r) => r.status < 500 });
-  sleep(0.1);
 }
 
 // --- WebSocket 廣播監聽函數 ---

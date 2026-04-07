@@ -11,6 +11,7 @@ import (
 
 	"github.com/RayLiu1999/exchange/internal/api"
 	"github.com/RayLiu1999/exchange/internal/domain"
+	"github.com/RayLiu1999/exchange/internal/infrastructure/db"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/kafka"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
@@ -18,7 +19,6 @@ import (
 	"github.com/RayLiu1999/exchange/internal/marketdata"
 	"github.com/RayLiu1999/exchange/internal/repository"
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
 
@@ -42,7 +42,9 @@ func main() {
 	if dbURL == "" {
 		logger.Log.Fatal("market-data-service: DATABASE_URL 環境變數未設定")
 	}
-	pool, err := pgxpool.New(context.Background(), dbURL)
+	dbCfg := db.DefaultDBConfig(dbURL)
+	dbCfg.MaxOpenConns = 50 // 行情服務的 DB 查詢為輔助性質（主要為快取），適中即可
+	pool, err := db.NewPostgresPool(context.Background(), dbCfg)
 	if err != nil {
 		logger.Log.Fatal("market-data-service: 無法連接資料庫", zap.Error(err))
 	}

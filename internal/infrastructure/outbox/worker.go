@@ -7,6 +7,7 @@ import (
 
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
 	"github.com/RayLiu1999/exchange/internal/infrastructure/metrics"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -66,6 +67,8 @@ func (w *Worker) process(ctx context.Context) {
 		return
 	}
 
+	var successfulIDs []uuid.UUID
+
 	for _, msg := range msgs {
 		start := time.Now()
 		publishErr := w.publisher.PublishRaw(ctx, msg.Topic, msg.PartitionKey, msg.Payload)
@@ -83,14 +86,21 @@ func (w *Worker) process(ctx context.Context) {
 			continue
 		}
 
-		// 發送成功：標記為 Published
-		if markErr := w.repo.MarkPublished(ctx, msg.ID); markErr != nil {
-			logger.Log.Error("Outbox Worker 標記 Published 失敗",
-				zap.String("id", msg.ID.String()),
+		// 發送成功：收集 ID 等待批次刪除
+		successfulIDs = append(successfulIDs, msg.ID)
+		metrics.ObserveOutboxPublish("success", latency)
+	}
+
+	// 批次標記已發布（物理刪除）
+	if len(successfulIDs) > 0 {
+		if markErr := w.repo.MarkPublishedBatch(ctx, successfulIDs); markErr != nil {
+			logger.Log.Error("Outbox Worker 批次標記 Published 失敗",
+				zap.Int("count", len(successfulIDs)),
 				zap.Error(markErr),
 			)
+		} else {
+			logger.Log.Debug("Outbox Worker 批次刪除成功", zap.Int("count", len(successfulIDs)))
 		}
-		metrics.ObserveOutboxPublish("success", latency)
 	}
 }
 

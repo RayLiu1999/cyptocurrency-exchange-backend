@@ -36,6 +36,7 @@ type OrderRepository interface {
 	GetOrdersByUser(ctx context.Context, userID uuid.UUID) ([]*domain.Order, error)
 	GetActiveOrders(ctx context.Context) ([]*domain.Order, error) // 取得所有尚未完全成交的訂單
 	DeleteAllOrders(ctx context.Context) error
+	BatchCreateOrders(ctx context.Context, orders []*domain.Order) error // 批次建立多筆訂單
 }
 
 // TradeRepository defines the interface for trade persistence
@@ -50,6 +51,7 @@ type AccountRepository interface {
 	CreateAccount(ctx context.Context, account *domain.Account) error
 	UpdateBalance(ctx context.Context, userID uuid.UUID, currency string, amount decimal.Decimal) error
 	LockFunds(ctx context.Context, userID uuid.UUID, currency string, amount decimal.Decimal) error
+	BatchLockFunds(ctx context.Context, lockedFunds map[uuid.UUID]map[string]decimal.Decimal) error // 批次鎖定多個用戶的資金
 	UnlockFunds(ctx context.Context, userID uuid.UUID, currency string, amount decimal.Decimal) error
 	GetAccountsByUser(ctx context.Context, userID uuid.UUID) ([]*domain.Account, error)
 }
@@ -63,6 +65,7 @@ type UserRepository interface {
 // OrderService 定義訂單與帳戶服務介面
 type OrderService interface {
 	PlaceOrder(ctx context.Context, order *domain.Order) error
+	BatchPlaceOrders(ctx context.Context, orders []*domain.Order) error // 供造市商用的批次下單
 	GetOrder(ctx context.Context, id uuid.UUID) (*domain.Order, error)
 	GetOrdersByUser(ctx context.Context, userID uuid.UUID) ([]*domain.Order, error)
 	CancelOrder(ctx context.Context, orderID, userID uuid.UUID) error
