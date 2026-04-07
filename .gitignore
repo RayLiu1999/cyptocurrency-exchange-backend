@@ -62,7 +62,7 @@ terraform.tfvars
 deploy/terraform/environments/**/terraform.tfvars
 deploy/terraform/environments/**/terraform.tfstate.*
 deploy/terraform/environments/**/.terraform/
-deploy/terraform/environments/**/tfplan
+deploy/terraform/**/tfplan
 deploy/terraform/environments/**/.terraform.lock.hcl
 deploy/terraform/environments/**/terraform.tfstate
 deploy/terraform/environments/**/terraform.tfstate.backup
@@ -73,13 +73,12 @@ deploy/terraform/environments/**/terraform.tfstate.backup
 
 # --- ecspresso / deployment helpers
 deploy/ecspresso/**/test-tfstate.json
-deploy/ecspresso/**/ecspresso.yml
 
 
-# --- Services
-matching-engine
-gateway
-order-service
-matching-engine
-market-data-service
-simulation-service
+# --- Services Binaries and build artifacts
+/matching-engine
+/gateway
+/order-service
+/matching-engine
+/market-data-service
+/simulation-service

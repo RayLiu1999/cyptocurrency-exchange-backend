@@ -1,180 +1,215 @@
-# 01 — 首次完整部署指南 (Quickstart)
+# 01 — 微服務 staging 首次部署指南
 
-本文件帶你從零開始，在 AWS 上完整建立 staging 環境。
-整個流程分為三個阶段：**基礎建設** → **映像推送** → **應用部署**。
+本文件描述現行 ECS staging 微服務 rollout 流程。目標是在 AWS 上建立可重複的 staging 環境，並完成四個核心服務的首次部署與 baseline 驗收。
+
+## 流程總覽
+
+| 階段 | 目標 | 主要指令 |
+|------|------|----------|
+| Phase 0 | 準備本地工具與 AWS 權限 | `aws sts get-caller-identity` |
+| Phase 1 | 建立 Terraform remote state | `make bootstrap-init`、`make bootstrap-apply` |
+| Phase 2 | 套用 staging 基礎設施 | `make infra-init`、`make infra-plan`、`make infra-apply` |
+| Phase 3 | 推送四個核心服務鏡像 | `make docker-build-push-core IMAGE_TAG=<tag>` |
+| Phase 4 | 首次建立四個核心 ECS 服務 | `make ecs-create-core IMAGE_TAG=<tag>` |
+| Phase 5 | 驗證 health、smoke、load、ws | `make ecs-status-all`、`make staging-baseline-test` |
 
 ## 先決條件
 
-### 1. 本地工具
+### 本地工具
 
-| 工具 | 版本要求 | 安裝 |
+| 工具 | 版本建議 | 用途 |
 |------|----------|------|
-| `terraform` | `>= 1.5.0` | `brew install terraform` |
-| `awscli` | v2 | `brew install awscli` |
-| `docker` | 任意 | Docker Desktop |
-| `ecspresso` | `>= 2.3` | `brew install ecspresso` |
+| `terraform` | `>= 1.5.0` | 管理 staging infra 與 bootstrap |
+| `awscli` | v2 | 驗證 AWS 帳號、ECR、CloudWatch、ECS 操作 |
+| `docker` | 最新穩定版 | 建置服務映像 |
+| `ecspresso` | `>= 2.3` | 建立與更新 ECS services |
+| `k6` | 最新穩定版 | 執行 smoke / load / ws 驗證 |
 
-驗證版本：
+版本檢查：
+
 ```bash
 terraform version
 aws --version
 docker --version
 ecspresso version
+k6 version
 ```
 
-### 2. AWS 帳號設定
+### AWS 權限
+
+至少需具備以下能力：
+
+| 類別 | 需要的能力 |
+|------|------------|
+| Terraform | VPC、ALB、ECS、RDS、Redis、ECR、CloudWatch、SSM、IAM、Cloud Map |
+| 部署 | `ecs:*`、`ecr:*`、`logs:*`、`ssm:GetParameter` |
+| 驗證 | `ecs:Describe*`、`logs:FilterLogEvents`、`cloudwatch:GetMetricData` |
+
+驗證登入狀態：
 
 ```bash
-# 設定 AWS 憑證（需有 AdministratorAccess 或對應的細粒度權限）
-aws configure
-
-# 驗證登入狀態
 aws sts get-caller-identity
 ```
 
-確認輸出包含正確的 `Account` 與 `UserId`，確保你操作的是正確的 AWS 帳號。
-
-### 3. 填寫部署變數
+### 填寫 staging 變數
 
 ```bash
-cd backend/deploy/terraform/environments/staging
-
-# terraform.tfvars 已在 .gitignore，不會被 git 追蹤
+cd deploy/terraform/environments/staging
 cp terraform.tfvars.example terraform.tfvars
 ```
 
-編輯 `terraform.tfvars`，填入你的值：
+至少確認以下值已正確填入：
 
 ```hcl
-db_password        = "你的強密碼（至少16字元）"
-budget_alert_email = "你的email@example.com"
+db_password        = "請使用強密碼"
+budget_alert_email = "your-email@example.com"
 ```
 
----
+## Phase 1：建立 Terraform remote state
 
-## Phase 1：建立雲端基礎建設 (Terraform)
+若 staging 尚未切到 S3 backend，先執行 bootstrap：
 
 ```bash
-cd backend/  # Makefile 所在目錄
+cd /Volumes/KINGSTON/Programming/cyptocurrency_exchange/backend
 
-# 步驟 1：初始化（下載 provider / module，只需執行一次）
+make bootstrap-init
+make bootstrap-plan
+make bootstrap-apply
+```
+
+完成後，將 `deploy/terraform/bootstrap/outputs.tf` 輸出的 backend 設定貼回 `deploy/terraform/environments/staging/main.tf`，再重新初始化 staging：
+完成後，將 `terraform output backend_config_snippet` 的內容貼回 `deploy/terraform/environments/staging/main.tf`，再重新初始化 staging：
+
+```bash
+cd deploy/terraform/bootstrap
+terraform output backend_config_snippet
+
+cd /Volumes/KINGSTON/Programming/cyptocurrency_exchange/backend
+make infra-init TERRAFORM_INIT_FLAGS=-reconfigure
+```
+
+> 若 staging 已經使用 remote state，可直接略過 bootstrap，執行 `make infra-init`。
+
+## Phase 2：套用 staging 基礎設施
+
+```bash
+cd /Volumes/KINGSTON/Programming/cyptocurrency_exchange/backend
+
 make infra-init
-
-# 步驟 2：預覽即將建立的資源（安全，不會建立任何東西）
 make infra-plan
-```
-
-`infra-plan` 完成後，確認輸出結尾有：
-```
-Plan: 55 to add, 0 to change, 0 to destroy.
-```
-
-重要確認清單（看 plan 輸出）：
-- [ ] `aws_vpc` — VPC 將建立
-- [ ] `aws_db_instance` — RDS PostgreSQL 將建立
-- [ ] `aws_elasticache_replication_group` — Redis 將建立
-- [ ] `aws_ecr_repository` — ECR 將建立
-- [ ] `aws_ecs_cluster` — ECS Cluster 將建立
-- [ ] `aws_budgets_budget` — $3 USD 預算警報將建立 ✅
-
-確認無誤後，正式套用：
-
-```bash
-# 步驟 3：建立所有資源（需要 10～20 分鐘，RDS 最慢）
 make infra-apply
 ```
 
-> ⚠️ **注意**：`apply` 完成後 AWS 開始計費。建議測試完畢後立即執行 `make destroy-all CONFIRM=1`。
+驗收重點：
 
-apply 完成後，記錄 outputs（後面會用到）：
-```bash
-cd deploy/terraform/environments/staging
-terraform output
-```
+- `infra-plan` 中應出現 Cloud Map、SSM、ALB、ECS、RDS、Redis、Redpanda 等預期資源。
+- `infra-apply` 成功後，`terraform output` 應能提供 `alb_dns_name`、`ecr_repository_url`、`ecs_cluster_name` 與各服務 `service_registry_arn`。
 
-你會看到類似：
-```
-alb_dns_name         = "exchange-staging-alb-XXXXXX.ap-northeast-1.elb.amazonaws.com"
-ecr_repository_url   = "123456789.dkr.ecr.ap-northeast-1.amazonaws.com/exchange/staging/monolith"
-ecs_cluster_name     = "exchange-staging"
-kafka_broker_address = "redpanda.exchange.internal:9092"
-log_group_name       = "/ecs/exchange/staging/monolith"
-```
-
----
-
-## Phase 2：建置並推送 Docker 映像到 ECR
+輸出確認：
 
 ```bash
-cd backend/  # 回到 Makefile 目錄
-
-# 步驟 4：登入 AWS ECR（Docker 映像倉庫）
-make aws-login
-
-# 步驟 5：在本地編譯 Docker 映像並推送到 ECR
-make docker-build-push
+make show-staging-outputs
 ```
 
-這個指令會自動：
-1. 執行 `docker build -t <ecr_url>:latest .`（打包目前目錄的程式碼）
-2. 執行 `docker push <ecr_url>:latest`（上傳到 AWS）
+預期至少看到：
 
-推送完成後驗證映像已存在 ECR：
-```bash
-aws ecr list-images \
-  --repository-name exchange/staging/monolith \
-  --region ap-northeast-1
-```
+- `ALB_DNS=<staging-alb-dns>`
+- `BASE_URL=http://<staging-alb-dns>/api/v1`
+- `WS_URL=ws://<staging-alb-dns>/ws`
 
----
+## Phase 3：推送四個核心服務映像
 
-## Phase 3：部署應用程式到 ECS
+建議使用 commit hash 當版本標記：
 
 ```bash
-# 步驟 6：設定映像 URL 環境變數（ecspresso 需要此變數）
-export ECR_IMAGE=$(cd deploy/terraform/environments/staging && terraform output -raw ecr_repository_url):latest
+cd /Volumes/KINGSTON/Programming/cyptocurrency_exchange/backend
+IMAGE_TAG=$(git rev-parse --short HEAD)
 
-# 步驟 7：首次建立 ECS Service
-cd deploy/ecspresso/monolith
-ecspresso create --config ecspresso.yml
-
-# 日後更新程式碼，改用 deploy（不用 create）：
-# ecspresso deploy --config ecspresso.yml
+make docker-build-push-core IMAGE_TAG=$IMAGE_TAG
 ```
 
-或直接使用 Makefile（日後更新用）：
-```bash
-cd backend/
-make ecs-deploy
-```
-
----
-
-## 驗證部署成功
+若只需要先驗證單一服務，也可以：
 
 ```bash
-# 取得 ALB 的網址
-ALB=$(cd deploy/terraform/environments/staging && terraform output -raw alb_dns_name)
-
-# 測試 Health Check endpoint
-curl http://$ALB/health
+make docker-build-push ECS_SERVICE=order-service IMAGE_TAG=$IMAGE_TAG
 ```
 
-預期回應：
-```json
-{"status":"ok"}
-```
+## Phase 4：首次建立四個核心 ECS 服務
 
-若正常回應，代表整個 VPC → ALB → ECS → RDS 的鏈路已全部打通。
+首輪部署順序固定為：
 
----
+| 順序 | 服務 | 原因 |
+|------|------|------|
+| 1 | `matching-engine` | 先讓撮合與 leader election 進入 steady state |
+| 2 | `order-service` | 需要 Kafka / DB / Redis 已可用 |
+| 3 | `market-data-service` | 需要消費行情事件 |
+| 4 | `gateway` | 最後對外開流量，避免上游未就緒 |
 
-## 一鍵完整部署腳本（供參考）
-
-以下是整個流程的一鍵腳本，適合第二次以後部署：
+首次建立：
 
 ```bash
-cd backend/
-make infra-plan    # 看看要改什麼
-make deploy-all    # apply + build-push + ecs-deploy
+make ecs-create-core IMAGE_TAG=$IMAGE_TAG
 ```
+
+若這批服務已建立過，之後請改用：
+
+```bash
+make ecs-deploy-core IMAGE_TAG=$IMAGE_TAG
+```
+
+## Phase 5：部署後驗證
+
+> 若首次部署在 `ecspresso` template、Redpanda 啟動、health check 或 RDS schema 初始化階段卡住，請直接對照 `09-STAGING-FIRST-DEPLOY-TROUBLESHOOTING.md`。
+
+### 先確認服務是否進入 steady state
+
+```bash
+make ecs-status-all
+```
+
+### Gateway health 與 HTTP baseline
+
+```bash
+make staging-health
+make staging-smoke-test SYMBOL=BTC-USD
+make staging-load-test
+```
+
+### WebSocket fanout 驗證
+
+WebSocket 驗證需要搭配持續打單流量。在兩個終端分開執行：
+
+終端 A：
+
+```bash
+make staging-load-test K6_ENV_FLAGS="--vus 100 --duration 2m"
+```
+
+終端 B：
+
+```bash
+make staging-ws-validation
+```
+
+### 正式驗收與 correctness audit
+
+接續請依 `06-STAGING-VALIDATION-RUNBOOK.md` 逐步勾選，並將結果填入 `docs/testing/TEST_REPORT_TEMPLATE.md`。
+
+## 常見操作分流
+
+| 場景 | 建議指令 |
+|------|----------|
+| 第一次完整建立 staging | `make infra-apply` → `make docker-build-push-core IMAGE_TAG=<tag>` → `make ecs-create-core IMAGE_TAG=<tag>` |
+| 只更新應用服務，不動 infra | `make docker-build-push-core IMAGE_TAG=<tag>` → `make ecs-deploy-core IMAGE_TAG=<tag>` |
+| 同一輪同時改 infra 與應用 | `make infra-plan` → `make staging-rollout-core IMAGE_TAG=<tag>` |
+| 只更新單一服務 | `make docker-build-push ECS_SERVICE=<service> IMAGE_TAG=<tag>` → `make ecs-deploy ECS_SERVICE=<service> IMAGE_TAG=<tag>` |
+
+## 完成定義
+
+符合以下條件，才算首次 staging 部署完成：
+
+- 四個核心服務皆可由 `make ecs-status-all` 顯示 steady state。
+- `make staging-health` 可回傳 `200`。
+- `make staging-smoke-test`、`make staging-load-test` 可跑完且無持續性 5xx。
+- `make staging-ws-validation` 期間 WebSocket 連線建立成功。
+- `docs/testing/TEST_REPORT_TEMPLATE.md` 已留下本輪結果與 correctness audit。

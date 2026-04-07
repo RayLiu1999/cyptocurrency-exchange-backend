@@ -1,25 +1,67 @@
+# ============================================================================
 # terraform.tfvars.example
-# 複製此檔案為 terraform.tfvars 並填入實際的機敏值
-# 注意：terraform.tfvars 已加入 .gitignore，請勿提交機敏資訊
+# ============================================================================
+# 使用方法：
+#   cp terraform.tfvars.example terraform.tfvars
+#   編輯 terraform.tfvars，填入實際的值
+#   terraform plan  # 確認無誤
+#   terraform apply
+#
+# ⚠️  terraform.tfvars 已加入 .gitignore，請勿 commit 機敏資訊
+# ⚠️  db_password 會以明文存在 terraform.tfstate，務必啟用 S3 backend 加密
+#
+# 這些參數控制什麼？詳細說明請見：
+#   deploy/docs/08-IAC-AND-ECSPRESSO-GUIDE.md
+# ============================================================================
 
-# ================================
-# 必填欄位（無預設值）
-# ================================
-db_password        = "CHANGE_ME_use_strong_password"
-budget_alert_email = "your-email@example.com"  # 超出預算上限時收到警報的 Email
+# ============================================================================
+# 必填欄位（無預設值，不設定會導致 terraform plan 直接失敗）
+# ============================================================================
 
-# ================================
-# 選填欄位（已有合理預設值）
-# ================================
+# RDS PostgreSQL 主帳號密碼
+# 要求：至少 16 字元，包含大小寫和數字
+# 注意：設定後若要修改，RDS 會執行密碼變更（不會重建 instance）
+db_password = "CHANGE_ME_use_strong_password"
+
+# AWS Budgets 超支警報 Email
+# 當月費用預估超過 budget_limit 的 80% 時，以及實際費用超過時，各寄一封警報信
+budget_alert_email = "your-email@example.com"
+
+# ============================================================================
+# 選填欄位（已有合理的 staging 預設值，通常不需要修改）
+# ============================================================================
+
+# 專案名稱前綴 — 所有 AWS 資源命名都會帶這個前綴，例如 exchange-staging-alb
 # project_name = "exchange"
-# environment  = "staging"
-# aws_region   = "ap-northeast-1"
 
-# vpc_cidr           = "10.0.0.0/16"
+# 環境識別符 — 影響資源命名與 SSM parameter 路徑（/exchange/staging/...）
+# environment = "staging"
+
+# AWS 部署區域
+# ap-northeast-1 = 東京，離台灣最近且費用相對低
+# aws_region = "ap-northeast-1"
+
+# VPC CIDR — 整個私有網路的 IP 範圍
+# 子網路（public/private × 2 AZ）會從這個範圍自動切分
+# vpc_cidr = "10.0.0.0/16"
+
+# 使用的可用區（AZ）— staging 用 2 個 AZ 達到基本 HA
 # availability_zones = ["ap-northeast-1a", "ap-northeast-1c"]
 
+# RDS instance 規格 — db.t4g.micro 是最小的 ARM Graviton 機型，約 $13/月
+# production 建議升到 db.t4g.small 或更高
 # db_instance_class = "db.t4g.micro"
-# db_name           = "exchange"
-# db_username       = "exchange_admin"
 
+# 資料庫名稱（schema name）
+# db_name = "exchange"
+
+# RDS 主帳號名稱
+# db_username = "exchange_admin"
+
+# ElastiCache Redis 節點規格 — cache.t4g.micro 約 $12/月
 # redis_node_type = "cache.t4g.micro"
+
+# AWS Budgets 月費用上限（USD）
+# 超過 80% 時發預測警報，超過 100% 時發實際費用警報
+# staging 預估月費：約 $55-80（RDS+Redis+NAT+ECS+ALB+EFS）
+# budget_limit = "3"

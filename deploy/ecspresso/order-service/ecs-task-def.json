@@ -1,0 +1,59 @@
+{
+  "family": "exchange-staging-order-service",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "{{ must_env `TASK_EXECUTION_ROLE_ARN` }}",
+  "taskRoleArn": "{{ must_env `TASK_ROLE_ARN` }}",
+  "containerDefinitions": [
+    {
+      "name": "order-service",
+      "image": "{{ must_env `ECR_IMAGE` }}",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8103,
+          "protocol": "tcp"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "{{ must_env `DATABASE_URL_SSM_ARN` }}"
+        },
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "{{ must_env `REDIS_URL_SSM_ARN` }}"
+        },
+        {
+          "name": "KAFKA_BROKERS",
+          "valueFrom": "{{ must_env `KAFKA_BROKERS_SSM_ARN` }}"
+        },
+        {
+          "name": "GIN_MODE",
+          "valueFrom": "{{ must_env `GIN_MODE_SSM_ARN` }}"
+        }
+      ],
+      "environment": [
+        {
+          "name": "ORDER_SERVICE_PORT",
+          "value": "8103"
+        },
+        {
+          "name": "KAFKA_RESET_OFFSET",
+          "value": "latest"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/exchange/staging/order-service",
+          "awslogs-region": "{{ must_env `AWS_REGION` }}",
+          "awslogs-stream-prefix": "order-service"
+        }
+      },
+      "stopTimeout": 120
+    }
+  ]
+}

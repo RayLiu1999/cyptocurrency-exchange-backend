@@ -166,19 +166,27 @@ resource "aws_security_group" "alb" {
 }
 
 # ------------------------------------------------------------------------------
-# 安全群組：ECS（只接受來自 ALB 的流量）
+# 安全群組：ECS（接受來自 ALB 的 gateway 流量，以及微服務之間的內部流量）
 # ------------------------------------------------------------------------------
 resource "aws_security_group" "ecs" {
   name        = "${var.project_name}-${var.environment}-sg-ecs"
-  description = "ECS tasks: accept from ALB only"
+  description = "ECS tasks: accept gateway traffic from ALB and service-to-service traffic"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description     = "App port from ALB"
-    from_port       = 8080
-    to_port         = 8080
+    description     = "Gateway port from ALB"
+    from_port       = 8100
+    to_port         = 8100
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
+  }
+
+  ingress {
+    description = "Service-to-service traffic within ECS"
+    from_port   = 8100
+    to_port     = 8104
+    protocol    = "tcp"
+    self        = true
   }
 
   egress {

@@ -1,0 +1,14 @@
+# legacy monolith deployment config
+# 仍依賴本地 terraform.tfstate path，僅供歷史拆分參考。
+# 啟用 remote state 後，現行微服務部署請改用新的 per-service 定義。
+region: ap-northeast-1
+cluster: exchange-staging
+service: monolith
+task_definition: ecs-task-def.json
+service_definition: ecs-service-def.json
+timeout: "10m0s"
+
+plugins:
+  - name: tfstate
+    config:
+      path: "../../../deploy/terraform/environments/staging/terraform.tfstate"

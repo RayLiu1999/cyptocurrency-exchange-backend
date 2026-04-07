@@ -18,8 +18,8 @@ terraform {
 # EFS File System（Redpanda broker 資料持久化）
 # ------------------------------------------------------------------------------
 resource "aws_efs_file_system" "redpanda" {
-  creation_token   = "${var.project_name}-${var.environment}-redpanda"
-  encrypted        = true
+  creation_token = "${var.project_name}-${var.environment}-redpanda"
+  encrypted      = true
 
   lifecycle_policy {
     transition_to_ia = "AFTER_7_DAYS"
@@ -174,20 +174,6 @@ resource "aws_ecs_task_definition" "redpanda" {
   execution_role_arn       = aws_iam_role.redpanda_execution.arn
   task_role_arn            = aws_iam_role.redpanda_task.arn
 
-  # EFS volume 掛載
-  volume {
-    name = "redpanda-data"
-
-    efs_volume_configuration {
-      file_system_id          = aws_efs_file_system.redpanda.id
-      transit_encryption      = "ENABLED"
-      authorization_config {
-        access_point_id = aws_efs_access_point.redpanda.id
-        iam             = "ENABLED"  # 👈 改為 ENABLED，與 IAM policy 搭配，只允許授權的 Task 存取
-      }
-    }
-  }
-
   container_definitions = jsonencode([{
     name      = "redpanda"
     image     = "docker.redpanda.com/redpandadata/redpanda:v23.3.21"
@@ -197,13 +183,6 @@ resource "aws_ecs_task_definition" "redpanda" {
       containerPort = 9092
       protocol      = "tcp"
       name          = "kafka"
-    }]
-
-    # EFS volume 掛載至 /var/lib/redpanda/data
-    mountPoints = [{
-      sourceVolume  = "redpanda-data"
-      containerPath = "/var/lib/redpanda/data"
-      readOnly      = false
     }]
 
     command = [
@@ -231,7 +210,7 @@ resource "aws_ecs_task_definition" "redpanda" {
       interval    = 30
       timeout     = 10
       retries     = 3
-      startPeriod = 120  # Redpanda 掛載 EFS 並初始化需要較長時間，60s 可能不夠
+      startPeriod = 120 # Redpanda 掛載 EFS 並初始化需要較長時間，60s 可能不夠
     }
   }])
 
@@ -275,7 +254,7 @@ resource "aws_ecs_service" "redpanda" {
 }
 
 # ------------------------------------------------------------------------------
-# SSM Parameter Store：Kafka broker 位址寫入，供 monolith ECS task 引用
+# SSM Parameter Store：Kafka broker 位址寫入，供應用服務 ECS tasks 引用
 # ------------------------------------------------------------------------------
 resource "aws_ssm_parameter" "kafka_brokers" {
   name  = "/${var.project_name}/${var.environment}/KAFKA_BROKERS"

@@ -1,0 +1,55 @@
+{
+  "family": "exchange-staging-gateway",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "{{ must_env `TASK_EXECUTION_ROLE_ARN` }}",
+  "taskRoleArn": "{{ must_env `TASK_ROLE_ARN` }}",
+  "containerDefinitions": [
+    {
+      "name": "gateway",
+      "image": "{{ must_env `ECR_IMAGE` }}",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8100,
+          "protocol": "tcp"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "{{ must_env `REDIS_URL_SSM_ARN` }}"
+        }
+      ],
+      "environment": [
+        {
+          "name": "GATEWAY_PORT",
+          "value": "8100"
+        },
+        {
+          "name": "ORDER_SERVICE_URL",
+          "value": "http://order-service.exchange.internal:8103"
+        },
+        {
+          "name": "MARKET_DATA_SERVICE_URL",
+          "value": "http://market-data-service.exchange.internal:8102"
+        },
+        {
+          "name": "SIMULATION_SERVICE_URL",
+          "value": "http://simulation-service.exchange.internal:8104"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/exchange/staging/gateway",
+          "awslogs-region": "{{ must_env `AWS_REGION` }}",
+          "awslogs-stream-prefix": "gateway"
+        }
+      },
+      "stopTimeout": 30
+    }
+  ]
+}

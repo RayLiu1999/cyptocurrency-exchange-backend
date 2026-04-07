@@ -1,0 +1,59 @@
+{
+  "family": "exchange-staging-matching-engine",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "{{ must_env `TASK_EXECUTION_ROLE_ARN` }}",
+  "taskRoleArn": "{{ must_env `TASK_ROLE_ARN` }}",
+  "containerDefinitions": [
+    {
+      "name": "matching-engine",
+      "image": "{{ must_env `ECR_IMAGE` }}",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8101,
+          "protocol": "tcp"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "{{ must_env `DATABASE_URL_SSM_ARN` }}"
+        },
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "{{ must_env `REDIS_URL_SSM_ARN` }}"
+        },
+        {
+          "name": "KAFKA_BROKERS",
+          "valueFrom": "{{ must_env `KAFKA_BROKERS_SSM_ARN` }}"
+        },
+        {
+          "name": "KAFKA_ALLOW_AUTO_CREATE",
+          "valueFrom": "{{ must_env `KAFKA_ALLOW_AUTO_CREATE_SSM_ARN` }}"
+        }
+      ],
+      "environment": [
+        {
+          "name": "MATCHING_ENGINE_PORT",
+          "value": "8101"
+        },
+        {
+          "name": "KAFKA_RESET_OFFSET",
+          "value": "latest"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/exchange/staging/matching-engine",
+          "awslogs-region": "{{ must_env `AWS_REGION` }}",
+          "awslogs-stream-prefix": "matching-engine"
+        }
+      },
+      "stopTimeout": 120
+    }
+  ]
+}

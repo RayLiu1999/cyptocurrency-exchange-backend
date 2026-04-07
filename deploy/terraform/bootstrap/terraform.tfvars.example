@@ -1,0 +1,9 @@
+# terraform.tfvars.example
+# 如需自訂 bucket / lock table 名稱，可複製為 terraform.tfvars 後覆寫。
+
+# project_name = "exchange"
+# environment  = "shared"
+# aws_region   = "ap-northeast-1"
+
+# state_bucket_name = "exchange-terraform-state"
+# lock_table_name   = "exchange-terraform-locks"

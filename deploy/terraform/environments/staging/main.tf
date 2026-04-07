@@ -21,14 +21,15 @@ terraform {
   }
 
   # 強烈建議：啟用 S3 remote state（避免 state 遺失）
-  # 部署前先執行 bootstrap/main.tf 建立 S3 bucket 與 DynamoDB lock table
-  # backend "s3" {
-  #   bucket         = "exchange-terraform-state"
-  #   key            = "staging/terraform.tfstate"
-  #   region         = "ap-northeast-1"
-  #   encrypt        = true
-  #   dynamodb_table = "exchange-terraform-locks"
-  # }
+  # 啟用前先套用 deploy/terraform/bootstrap/，建立 S3 bucket 與 DynamoDB lock table
+  # 完成後取消下方 backend 註解，再執行 terraform init -reconfigure
+  backend "s3" {
+    bucket         = "exchange-terraform-state-bucket"
+    key            = "staging/terraform.tfstate"
+    region         = "ap-northeast-1"
+    encrypt        = true
+    dynamodb_table = "exchange-terraform-locks"
+  }
 }
 
 provider "aws" {
@@ -44,6 +45,14 @@ locals {
     Project     = var.project_name
     Environment = var.environment
     ManagedBy   = "terraform"
+  }
+
+  service_ports = {
+    gateway             = 8100
+    matching-engine     = 8101
+    market-data-service = 8102
+    order-service       = 8103
+    simulation-service  = 8104
   }
 }
 
@@ -142,6 +151,47 @@ resource "aws_ssm_parameter" "kafka_allow_auto_create" {
 }
 
 # ------------------------------------------------------------------------------
+# Cloud Map：應用服務的內部 DNS 註冊
+# 讓 gateway、order-service、matching-engine、market-data-service 等服務
+# 可以透過 *.exchange.internal 進行固定名稱的 service discovery
+# ------------------------------------------------------------------------------
+resource "aws_service_discovery_service" "app" {
+  for_each = local.service_ports
+
+  name = each.key
+
+  dns_config {
+    namespace_id = module.messaging.service_discovery_namespace_id
+
+    dns_records {
+      ttl  = 10
+      type = "A"
+    }
+
+    routing_policy = "MULTIVALUE"
+  }
+
+  health_check_custom_config {
+    failure_threshold = 1
+  }
+
+  tags = local.common_tags
+}
+
+# ------------------------------------------------------------------------------
+# CloudWatch Log Groups：per-service 應用日誌
+# 與 task definition 中的 awslogs-group 對齊，避免部署時依賴自動建組
+# ------------------------------------------------------------------------------
+resource "aws_cloudwatch_log_group" "service" {
+  for_each = local.service_ports
+
+  name              = "/ecs/${var.project_name}/${var.environment}/${each.key}"
+  retention_in_days = 7
+
+  tags = local.common_tags
+}
+
+# ------------------------------------------------------------------------------
 # AWS Budgets：超出預算時發送 Email 警報（預算安全防護）
 # 當月費用預估超過 $3 USD 時立即通知，避免意外帳單
 # ------------------------------------------------------------------------------
@@ -154,15 +204,15 @@ resource "aws_budgets_budget" "monthly" {
 
   notification {
     comparison_operator        = "GREATER_THAN"
-    threshold                  = 80  # 費用超過上限的 80% 時第一次警報
+    threshold                  = 80 # 費用超過上限的 80% 時第一次警報
     threshold_type             = "PERCENTAGE"
-    notification_type          = "FORECASTED"  # 預測值超標就警報，不等到真的花超
+    notification_type          = "FORECASTED" # 預測值超標就警報，不等到真的花超
     subscriber_email_addresses = [var.budget_alert_email]
   }
 
   notification {
     comparison_operator        = "GREATER_THAN"
-    threshold                  = 100  # 費用實際超過時再次警報
+    threshold                  = 100 # 費用實際超過時再次警報
     threshold_type             = "PERCENTAGE"
     notification_type          = "ACTUAL"
     subscriber_email_addresses = [var.budget_alert_email]

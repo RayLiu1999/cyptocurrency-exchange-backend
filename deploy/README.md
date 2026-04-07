@@ -1,236 +1,129 @@
 # Infrastructure Deployment
 
-## 📚 詳細文件
+本目錄是現行 AWS ECS 微服務部署入口。除 `deploy/ecspresso/monolith/` 仍保留為歷史拆分參考外，其餘 Terraform、ecspresso 與操作文件均以 `gateway`、`order-service`、`matching-engine`、`market-data-service` 的 per-service 部署模型為準。
 
-| 文件 | 說明 |
-|------|------|
-| [01-QUICKSTART.md](./docs/01-QUICKSTART.md) | 首次完整部署逐步指南 |
-| [02-DAILY-WORKFLOW.md](./docs/02-DAILY-WORKFLOW.md) | 日常更新程式碼、查 log、回滾 |
-| [03-TEARDOWN.md](./docs/03-TEARDOWN.md) | ⚠️ **完整清除所有資源（避免漏費）** |
+## 文件導覽
 
----
+| 文件 | 用途 | 何時閱讀 |
+|------|------|----------|
+| [01-QUICKSTART.md](./docs/01-QUICKSTART.md) | 首次建立 staging 微服務環境 | 第一次部署前 |
+| [02-DAILY-WORKFLOW.md](./docs/02-DAILY-WORKFLOW.md) | 日常 build、deploy、rollback、log 查詢 | 日常維運 |
+| [03-TEARDOWN.md](./docs/03-TEARDOWN.md) | 完整刪除 ECS 與 Terraform 資源 | 測試結束或節省費用 |
+| [04-ECS-MICROSERVICES-EXECUTION-CHECKLIST.md](./docs/04-ECS-MICROSERVICES-EXECUTION-CHECKLIST.md) | ECS 重整任務清單與完成定義 | 追蹤進度 |
+| [05-CURRENT-SERVICE-CONTRACT.md](./docs/05-CURRENT-SERVICE-CONTRACT.md) | 微服務拓樸、SSM、Cloud Map、內部 DNS 契約 | 對齊部署參數 |
+| [06-STAGING-VALIDATION-RUNBOOK.md](./docs/06-STAGING-VALIDATION-RUNBOOK.md) | staging 驗證順序、測試 gate 與證據清單 | 部署驗收前 |
+| [07-PRODUCTION-READY-BACKLOG.md](./docs/07-PRODUCTION-READY-BACKLOG.md) | production-ready backlog、go / no-go gate | staging 驗證後 |
+| [08-IAC-AND-ECSPRESSO-GUIDE.md](./docs/08-IAC-AND-ECSPRESSO-GUIDE.md) | Terraform 與 ecspresso 的分工、參數來源與部署機制 | 需要理解整體 deploy stack 時 |
+| [09-STAGING-FIRST-DEPLOY-TROUBLESHOOTING.md](./docs/09-STAGING-FIRST-DEPLOY-TROUBLESHOOTING.md) | 首輪 staging 部署實際故障、根因與修復紀錄 | 首次部署失敗或需要復盤時 |
+
+## 建議閱讀順序
+
+1. 先看 `04-ECS-MICROSERVICES-EXECUTION-CHECKLIST.md`，確認目前 issue 階段。
+2. 再看 `05-CURRENT-SERVICE-CONTRACT.md`，對齊服務 port、SSM 與 service discovery 契約。
+3. 第一次部署時照 `01-QUICKSTART.md` 操作。
+4. 部署完成後，依 `06-STAGING-VALIDATION-RUNBOOK.md` 做驗收。
+5. 若首次部署失敗，優先對照 `09-STAGING-FIRST-DEPLOY-TROUBLESHOOTING.md`。
+6. 若需要理解 Terraform 與 ecspresso 的責任邊界，再看 `08-IAC-AND-ECSPRESSO-GUIDE.md`。
+7. 完成驗收後，依 `07-PRODUCTION-READY-BACKLOG.md` 排下一輪強化工作。
 
 ## 架構概覽
 
 ```mermaid
 graph TB
-    subgraph VPC ["AWS VPC (10.0.0.0/16)"]
-        subgraph PublicSubnets ["Public Subnets (ALB Only)"]
-            ALB["Application Load Balancer (Port 80)"]
-        end
+    Internet((Internet)) --> ALB[ALB]
+    ALB --> Gateway[gateway :8100]
 
-        subgraph PrivateSubnets ["Private Subnets (Apps & Data)"]
-            subgraph ECS_Cluster ["ECS Cluster (Fargate)"]
-                Service1["Monolith App Service (Port 8080)"]
-                Service2["Redpanda (Kafka) Service (Port 9092)"]
-            end
+    Gateway --> Order[order-service :8103]
+    Gateway --> Market[market-data-service :8102]
+    Gateway --> Sim[simulation-service :8104]
 
-            subgraph Storage ["Persistent Data"]
-                RDS[("RDS PostgreSQL 16")]
-                Redis[("ElastiCache Redis 7")]
-                EFS["EFS (Redpanda Data)"]
-            end
-        end
+    Order --> PG[(PostgreSQL)]
+    Order --> Redis[(Redis)]
+    Order --> Redpanda[redpanda :9092]
 
-        NAT["NAT Gateway (Single)"]
-        IGW["Internet Gateway"]
-    end
+    Matching[matching-engine :8101] --> PG
+    Matching --> Redis
+    Matching --> Redpanda
 
-    Internet((Internet)) --> ALB
-    ALB -->|Forward| Service1
-    Service1 -->|Query| RDS
-    Service1 -->|Cache/RateLimit| Redis
-    Service1 -->|Produce/Consume| Service2
-    Service2 <-->|Persistence| EFS
-    Service1 -.->|Outbound| NAT
-    NAT --> IGW
-    IGW --> Internet
+    Market --> PG
+    Market --> Redis
+    Market --> Redpanda
 
-    subgraph Management ["DevOps Tools"]
-        S3[("S3: TF State Bucket")]
-        DDB[("DynamoDB: TF Lock Table")]
-        SSM["SSM Parameter Store (Secrets)"]
-        ECR["ECR Repository (Docker Images)"]
-    end
+    CloudMap[Cloud Map exchange.internal] -. service discovery .-> Gateway
+    CloudMap -. service discovery .-> Order
+    CloudMap -. service discovery .-> Matching
+    CloudMap -. service discovery .-> Market
 
-    SSM -.->|Inject Vars| Service1
-    ECR -.->|Pull Image| Service1
+    SSM[SSM Parameter Store] -. inject secrets .-> Gateway
+    SSM -. inject secrets .-> Order
+    SSM -. inject secrets .-> Matching
+    SSM -. inject secrets .-> Market
+
+    ECR[ECR Repository] -. image pull .-> Gateway
+    ECR -. image pull .-> Order
+    ECR -. image pull .-> Matching
+    ECR -. image pull .-> Market
 ```
 
-## 📂 目錄結構
+## 目錄結構
 
-```
+```text
 deploy/
 ├── terraform/
+│   ├── bootstrap/               # 建立 S3 remote state bucket 與 DynamoDB lock table
 │   ├── modules/
-│   │   ├── network/     ← VPC、子網路、NAT Gateway、安全群組
-│   │   ├── container/   ← ECR、ECS Cluster、IAM Role、CloudWatch Logs
-│   │   ├── data/        ← RDS PostgreSQL 16 + ElastiCache Redis 7
-│   │   ├── messaging/   ← Redpanda (Kafka) on ECS + EFS 持久化
-│   │   └── alb/         ← Application Load Balancer + Target Group
+│   │   ├── network/
+│   │   ├── container/
+│   │   ├── data/
+│   │   ├── messaging/
+│   │   └── alb/
 │   └── environments/
-│       └── staging/     ← 組合所有模組的根模組
-└── ecspresso/
-    └── monolith/        ← ECS Service + Task Definition（CI 管理 image tag）
+│       └── staging/
+├── ecspresso/
+│   ├── gateway/
+│   ├── order-service/
+│   ├── matching-engine/
+│   ├── market-data-service/
+│   └── monolith/               # legacy，僅供歷史參考
+└── docs/
+    ├── 01-QUICKSTART.md
+    ├── 02-DAILY-WORKFLOW.md
+    ├── 03-TEARDOWN.md
+    ├── 04-ECS-MICROSERVICES-EXECUTION-CHECKLIST.md
+    ├── 05-CURRENT-SERVICE-CONTRACT.md
+    ├── 06-STAGING-VALIDATION-RUNBOOK.md
+    └── 07-PRODUCTION-READY-BACKLOG.md
 ```
+
+## 常用 Makefile 入口
+
+| 目的 | 指令 |
+|------|------|
+| 啟用 remote state bootstrap | `make bootstrap-init && make bootstrap-plan && make bootstrap-apply` |
+| 初始化 / 預覽 / 套用 staging infra | `make infra-init` / `make infra-plan` / `make infra-apply` |
+| 顯示 ALB、API、WS 入口 | `make show-staging-outputs` |
+| 推送單一服務鏡像 | `make docker-build-push ECS_SERVICE=order-service IMAGE_TAG=<tag>` |
+| 推送四個核心服務鏡像 | `make docker-build-push-core IMAGE_TAG=<tag>` |
+| 首次建立四個核心服務 | `make ecs-create-core IMAGE_TAG=<tag>` |
+| 依序更新四個核心服務 | `make ecs-deploy-core IMAGE_TAG=<tag>` |
+| 檢查四個核心服務狀態 | `make ecs-status-all` |
+| 執行 staging baseline | `make staging-baseline-test` |
+| 執行 WebSocket 驗證 | `make staging-ws-validation` |
+| 完整刪除環境 | `make destroy-all CONFIRM=1` |
 
 ## 設計原則
 
 | 決策 | 理由 |
 |------|------|
-| **Terraform = 基礎設施層** | VPC/RDS/Redis/ALB/ECS Cluster — 改動頻率低，需要 state 管理 |
-| **ecspresso = 部署層** | ECS Service + Task Def — image tag 由 CI 動態替換，不鎖 Terraform state |
-| **Redpanda on ECS（非 MSK）** | ~$10-15/月 vs MSK $200+/月；franz-go 完全相容；與本地 docker-compose 一致 |
-| **SSM Parameter Store** | 機敏值不進 Terraform state 明文；ECS 啟動時動態注入 |
-| **單 NAT Gateway** | staging 節省費用（production 可改為每 AZ 一個）|
+| Terraform 管基礎設施 | VPC、ALB、RDS、Redis、ECS Cluster、Cloud Map 與 SSM 需有明確 state 管理 |
+| ecspresso 管服務部署 | task/service definition 與 image tag 更新頻率高，適合與 infra state 解耦 |
+| Redpanda 保持單節點 staging | 先驗證應用鏈路與運維成本，再評估 HA 或 managed Kafka |
+| SSM Parameter Store 注入敏感資訊 | 避免把連線字串散落在多份部署檔案 |
+| gateway 是唯一對外 Target Group | 首輪先收斂單一入口，降低 ALB 與路由複雜度 |
 
-## 首次部署流程
+## 備註
 
-### 前置條件
-- AWS CLI 已設定（`aws configure`）
-- Terraform >= 1.6（`brew install terraform`）
-- ecspresso（`brew install ecspresso`，或參考 [ecspresso releases](https://github.com/kayac/ecspresso/releases)）
-
-### 步驟 1：初始化 Terraform
-
-```bash
-cd deploy/terraform/environments/staging
-cp terraform.tfvars.example terraform.tfvars
-# 編輯 terraform.tfvars，填入 db_password
-terraform init
-```
-
-### 步驟 2：啟用 S3 Remote State（建議）
-
-```bash
-# 先建立 S3 bucket 和 DynamoDB lock table
-aws s3 mb s3://exchange-terraform-state --region ap-northeast-1
-aws s3api put-bucket-versioning \
-  --bucket exchange-terraform-state \
-  --versioning-configuration Status=Enabled
-aws dynamodb create-table \
-  --table-name exchange-terraform-locks \
-  --attribute-definitions AttributeName=LockID,AttributeType=S \
-  --key-schema AttributeName=LockID,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST \
-  --region ap-northeast-1
-
-# 取消 main.tf 中 backend "s3" {} 的註解，然後：
-terraform init -reconfigure
-```
-
-### 步驟 3：部署基礎設施
-
-```bash
-terraform plan    # 確認要建立的資源
-terraform apply   # 實際建立（約 15-20 分鐘，RDS 最慢）
-```
-
-### 步驟 4：部署 monolith 應用程式
-
-```bash
-# 取得 ECR URL
-ECR_URL=$(terraform output -raw ecr_repository_url)
-
-# Build & Push image
-cd ../../..  # 回到 backend/
-aws ecr get-login-password --region ap-northeast-1 | \
-  docker login --username AWS --password-stdin $ECR_URL
-
-docker build -t $ECR_URL:latest .
-docker push $ECR_URL:latest
-
-# 用 ecspresso 建立/更新 ECS Service
-cd deploy/ecspresso/monolith
-ECR_IMAGE=$ECR_URL:latest ecspresso create   # 首次建立
-# 或
-ECR_IMAGE=$ECR_URL:latest ecspresso deploy   # 後續更新
-```
-
-### 步驟 5：驗證部署
-
-```bash
-ALB_DNS=$(cd ../../terraform/environments/staging && terraform output -raw alb_dns_name)
-
-# 健康檢查
-curl http://$ALB_DNS/health
-# 預期：{"status":"ok"}
-
-# 查看 logs
-aws logs tail /ecs/exchange/staging/monolith --follow
-```
-
-## 常用維運指令
-
-```bash
-# ECS Exec（進入容器除錯）
-aws ecs execute-command \
-  --cluster exchange-staging \
-  --task <task-id> \
-  --container monolith \
-  --interactive \
-  --command "/bin/sh"
-
-# 查看 Redpanda logs
-aws logs tail /ecs/exchange/staging/redpanda --follow
-
-# 僅更新 image（不動基礎設施）
-ECR_IMAGE=$ECR_URL:$GIT_SHA ecspresso deploy
-
-# Terraform 查看 state
-terraform state list
-terraform output
-```
-
-## 注意事項
-
-- `terraform.tfvars` 已加入 `.gitignore`，**請勿提交到 Git**
-- Redpanda desiredCount 固定為 1（有狀態服務，不支援水平擴展）
-- staging 的 RDS 設定 `skip_final_snapshot = true`，**刪除前資料不會保留**
-- ElastiCache 使用 TLS（`rediss://`），確認 Go 客戶端設定 `tls.Config{}` 或 `true`
-
----
-
-## 💣 踩坑紀錄與常見問題 (Troubleshooting)
-
-在實際架設與銷毀 AWS 雲端環境時，我們曾遇到以下狀況與對應的解法：
-
-### 1. Terraform Destroy 卡死 (RepositoryNotEmptyException)
-**問題**：執行 `make destroy-all` 時，Terraform 無法刪除 ECR Repository，出現：`RepositoryNotEmptyException: The repository with name 'monolith' in registry ... cannot be deleted because it still contains images`。
-**解法**：
-1. 在 Terraform `modules/container/main.tf` 中將 ECR 的屬性設為 `force_delete = true`。
-2. **一定要先執行 `terraform apply`** 將這個屬性更新至 AWS 後，再執行 `terraform destroy`，才能無視映像檔庫內的殘留檔案強制刪除。
-
-### 2. Terraform State 被鎖住 (Error acquiring the state lock)
-**問題**：因為 Terraform `apply` 或 `destroy` 執行到一半被中斷 (例如因為網路變數被刪導致卡住按 Ctrl+C)，再次執行時出現 `Error message: resource temporarily unavailable` 且帶有一個 Lock ID。
-**解法**：手動強制解鎖。執行：
-```bash
-terraform force-unlock -force <Lock-ID>
-```
-
-### 3. ecspresso delete 卡住 (Service cannot be stopped while it is scaled above 0)
-**問題**：刪除環境時出現 `InvalidParameterException: The service cannot be stopped while it is scaled above 0.` 因為先被刪除了子網路或 Security Group 導致 ECS Task 無法啟動或終止，陷入無限迴圈無法 Scale Down。
-**解法**：
-1. Terraform 管理基礎設定，ecspresso 管理部署任務（解耦雙面刃：銷毀時可能會有順序競爭）。
-2. 將 `aws ecs update-service --desired-count 0` 與 `aws ecs delete-service --force` 作為強力手段。
-3. `make destroy-all` 會先執行 `ecspresso delete --force`，再執行 `terraform destroy`。如果 ecspresso 報錯但其實叢集即將被 Terraform 整個摧毀，可以使用 `-` 忽略該錯誤並讓 Terraform 繼續刪除叢集。
-
-### 4. 手動清理 AWS 殘餘資源的優先順序
-**問題**：當 Terraform 或 ecspresso 因依賴關係而無法完全自動銷毀環境時，手動清理的正確順序為何？
-**解法**：為確保清理最完整且不遺留計費資源，請遵循以下「由內而外」的順序：
-1. **ECS**：先刪除 **Service** (需手動 Stop Tasks)，再刪除 **Cluster**。這是解決 `ClusterContainsServicesException` 的核心。
-2. **計費實例**：刪除 **RDS (Database)**、**ElastiCache (Redis)**。刪除 RDS 時請勾選「不建立 Final Snapshot」。
-3. **網路依賴**：刪除 **ALB (Load Balancer)** 與 **NAT Gateway**。NAT Gateway 刪除通常需要 3-5 分鐘。
-4. **最後防線**：當上述資源消失後，直接刪除自定義的 **VPC**。AWS 會嘗試合併刪除 Subnets, IGW 與 Route Tables。
-5. **其餘殘骸**：檢查並手動刪除 **CloudWatch Log Groups** (尤其是 `/aws/ecs/containerinsights/...`)、**ECR Repositories** 與 **EFS File Systems**。
-6. **本地歸零**：雲端清空後，執行 `terraform destroy -auto-approve -refresh=false` 強制抹除本地 state 記錄。
-
-### 5. 辨識 AWS 預設資源 (不需刪除)
-**問題**：在後台看到很多不認得的資源（如預設 VPC、Option Groups、Users），是否也需要刪除？
-**解法**：
-- **Default VPC** (172.31.0.0/16)：AWS 帳號預設資源，**留著不會扣錢**。
-- **RDS Option Groups** (`default:postgres-16`)：系統預設範本，**留著不會扣錢**。
-- **ElastiCache Users** (`default`)：Redis 系統帳號，**不可刪除且免費**。
-- **RDS Events / Logs**：唯讀的操作日誌，**14天後自動消失且免費**。
-- **ECS Task Definitions**：部署藍圖/版本記錄，**不佔空間且不收費**。
+- `simulation-service` 目前不在首輪 blocking scope，文件與 Makefile 以四個核心服務為主。
+- `deploy/ecspresso/monolith/` 與 legacy monolith 文件仍保留，但不再是現行 deploy 路徑。
+- 若 staging 已切到 S3 backend，請避免再使用 local `terraform.tfstate` 作為部署來源。
 

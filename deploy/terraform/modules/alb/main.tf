@@ -1,6 +1,6 @@
 ################################################################################
 # ALB Module
-# Application Load Balancer：對外開放 HTTP，轉發至 ECS 任務的 8080 port
+# Application Load Balancer：對外開放 HTTP，轉發至 gateway 的 8100 port
 # Target Group 使用 /health 做健康檢查（而非舊版的 /swagger/index.html）
 ################################################################################
 
@@ -34,12 +34,12 @@ resource "aws_lb" "main" {
 }
 
 # ------------------------------------------------------------------------------
-# Target Group（指向 ECS 任務的 8080 port）
+# Target Group（指向 gateway 任務的 8100 port）
 # /health 的健康檢查：2 次成功即視為健康，2 次失敗即移除
 # ------------------------------------------------------------------------------
 resource "aws_lb_target_group" "app" {
   name        = "${var.project_name}-${var.environment}-tg"
-  port        = 8080
+  port        = 8100
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
   target_type = "ip" # Fargate 必須使用 ip

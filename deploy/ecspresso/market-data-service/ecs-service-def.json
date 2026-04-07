@@ -1,0 +1,30 @@
+{
+  "serviceName": "market-data-service",
+  "desiredCount": 1,
+  "launchType": "FARGATE",
+  "platformVersion": "LATEST",
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": {{ must_env `PRIVATE_SUBNET_IDS_JSON` }},
+      "securityGroups": [{{ must_env `ECS_SECURITY_GROUP_JSON` }}],
+      "assignPublicIp": "DISABLED"
+    }
+  },
+  "serviceRegistries": [
+    {
+      "registryArn": "{{ must_env `MARKET_DATA_SERVICE_REGISTRY_ARN` }}"
+    }
+  ],
+  "deploymentConfiguration": {
+    "minimumHealthyPercent": 50,
+    "maximumPercent": 200,
+    "deploymentCircuitBreaker": {
+      "enable": true,
+      "rollback": true
+    }
+  },
+  "deploymentController": {
+    "type": "ECS"
+  },
+  "enableExecuteCommand": true
+}

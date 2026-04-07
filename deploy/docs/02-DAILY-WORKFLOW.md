@@ -1,188 +1,195 @@
-# 02 — 日常操作指南 (Daily Workflow)
+# 02 — 微服務日常操作指南
 
-本文件說明在基礎建設已建立後，如何進行日常的程式碼更新、查看 log、以及常見的維護操作。
+本文件描述 staging 已建立後的日常部署、驗證、除錯與回滾流程。所有指令都以 Makefile 為入口，避免手動拼接 Terraform outputs 或 ecspresso 環境變數。
 
----
+## 最常見場景
 
-## 更新程式碼（最常見的操作）
+| 場景 | 建議流程 |
+|------|----------|
+| 只更新單一服務 | `docker-build-push` → `ecs-deploy` |
+| 同步更新四個核心服務 | `docker-build-push-core` → `ecs-deploy-core` |
+| 首次建立某個服務 | `docker-build-push` → `ecs-create` |
+| 查某服務狀態與 logs | `ecs-status`、`ecs-logs` |
+| 執行 staging baseline | `staging-health`、`staging-smoke-test`、`staging-load-test` |
 
-每次修改 Go 後端程式碼後：
+## 更新單一服務
 
 ```bash
-cd backend/
+cd /Volumes/KINGSTON/Programming/cyptocurrency_exchange/backend
 
-# 1. 重新編譯並推送映像（一定要先做這步）
-make docker-build-push
+IMAGE_TAG=$(git rev-parse --short HEAD)
 
-# 2. 部署新版本到 ECS（觸發滾動更新，零停機）
-make ecs-deploy
+make docker-build-push ECS_SERVICE=order-service IMAGE_TAG=$IMAGE_TAG
+make ecs-deploy ECS_SERVICE=order-service IMAGE_TAG=$IMAGE_TAG
+make ecs-status ECS_SERVICE=order-service
 ```
 
-> **提醒**：`ecs-deploy` 會觸發 ECS 滾動更新，ECS 會先啟動一個新版本 Task、確認 Health Check 通過後，才把舊版本 Task 停掉，確保零停機。
+適用情境：
 
-### 使用特定版本 Tag（推薦用於生產）
+- 只改到單一服務程式碼。
+- 想縮小 blast radius。
+- 想先驗證某個服務 patch。
+
+## 更新四個核心服務
 
 ```bash
-# 用 Git commit hash 標記（避免 latest 造成的不確定性）
-IMG_TAG=$(git rev-parse --short HEAD)
-REPO=$(cd deploy/terraform/environments/staging && terraform output -raw ecr_repository_url)
+cd /Volumes/KINGSTON/Programming/cyptocurrency_exchange/backend
 
-docker build -t ${REPO}:${IMG_TAG} .
-docker push ${REPO}:${IMG_TAG}
+IMAGE_TAG=$(git rev-parse --short HEAD)
 
-export ECR_IMAGE="${REPO}:${IMG_TAG}"
-cd deploy/ecspresso/monolith
-ecspresso deploy --config ecspresso.yml
+make docker-build-push-core IMAGE_TAG=$IMAGE_TAG
+make ecs-deploy-core IMAGE_TAG=$IMAGE_TAG
+make ecs-status-all
 ```
 
----
+適用情境：
 
-## 查看日誌
+- 改到共用 package、共用 Dockerfile、共用 runtime 依賴。
+- 同一輪需要對齊多個服務版本。
+
+## 首次建立服務
+
+若某服務尚未建立 ECS service，請使用 `ecs-create`，不要直接 `ecs-deploy`：
 
 ```bash
-# 在終端機即時 tail 雲端 Log（Ctrl+C 停止）
-make ecs-logs
+IMAGE_TAG=$(git rev-parse --short HEAD)
+
+make docker-build-push ECS_SERVICE=market-data-service IMAGE_TAG=$IMAGE_TAG
+make ecs-create ECS_SERVICE=market-data-service IMAGE_TAG=$IMAGE_TAG
 ```
 
-等同於：
+若要一次建立四個核心服務：
+
 ```bash
-cd deploy/ecspresso/monolith
-ecspresso logs --config ecspresso.yml --follow --start=5m
+make ecs-create-core IMAGE_TAG=$IMAGE_TAG
 ```
 
-### 直接查詢 CloudWatch Logs（更彈性的時間範圍）
+## 查看狀態、logs 與進入容器
+
+### 查看單一服務狀態
 
 ```bash
-aws logs tail /ecs/exchange/staging/monolith \
-  --follow \
-  --since 1h \
-  --region ap-northeast-1
+make ecs-status ECS_SERVICE=gateway
+make ecs-status ECS_SERVICE=matching-engine
 ```
 
----
-
-## 查看服務狀態
+### 一次查看四個核心服務
 
 ```bash
-# 查看 ECS Service + 最近的部署事件
-make ecs-status
+make ecs-status-all
 ```
 
-等同於：
+### 查看即時 logs
+
 ```bash
-cd deploy/ecspresso/monolith
-ecspresso status --config ecspresso.yml --events
+make ecs-logs ECS_SERVICE=order-service
+make ecs-logs ECS_SERVICE=gateway
 ```
 
-### 用 AWS CLI 直接查詢
+### 進入容器除錯
 
 ```bash
-# 列出 ECS Task 的詳細狀態
-aws ecs list-tasks \
-  --cluster exchange-staging \
-  --region ap-northeast-1
-
-# 查詢 Task 的 IP 等詳情（替換 <task-arn>）
-aws ecs describe-tasks \
-  --cluster exchange-staging \
-  --tasks <task-arn> \
-  --region ap-northeast-1
-```
-
----
-
-## 進入容器執行指令（類似 `docker exec`）
-
-> 需要 Task Definition 中啟用 `enableExecuteCommand`
-
-```bash
-# 進入運行的容器
-make ecs-exec
-```
-
-等同於：
-```bash
-cd deploy/ecspresso/monolith
-ecspresso exec --config ecspresso.yml --command /bin/sh
+make ecs-exec ECS_SERVICE=gateway
 ```
 
 常見用途：
-- 手動執行資料庫 migration
-- 查看容器內的環境變數（確認 SSM 秘密是否正確注入）
-- 臨時 debug
 
----
+- 確認 SSM secrets 是否正確注入。
+- 檢查容器內 DNS 解析是否可連到 `*.exchange.internal`。
+- 做只讀型診斷，例如 `env`、`wget http://order-service.exchange.internal:8103/health`。
 
-## 回滾到上一個版本
+## 回滾
 
 ```bash
-# 自動回滾到上一個穩定的 Task Definition
-make ecs-rollback
+make ecs-rollback ECS_SERVICE=gateway
+make ecs-rollback ECS_SERVICE=order-service
 ```
 
-等同於：
+回滾後建議立刻執行：
+
 ```bash
-cd deploy/ecspresso/monolith
-ecspresso rollback --config ecspresso.yml
+make ecs-status ECS_SERVICE=gateway
+make staging-health
 ```
 
----
+## staging 驗證
 
-## 停用 ECS（暫時節省費用，保留基礎建設）
-
-若只想暫停 ECS Task 但保留 RDS/Redis 等資源：
+### 顯示目前對外入口
 
 ```bash
-# 把 desired_count 設為 0（停止 Task，但 Service 保留）
+make show-staging-outputs
+```
+
+### HTTP baseline
+
+```bash
+make staging-health
+make staging-smoke-test SYMBOL=BTC-USD
+make staging-load-test
+```
+
+### WebSocket fanout
+
+在兩個終端分開執行：
+
+終端 A：
+
+```bash
+make staging-load-test K6_ENV_FLAGS="--vus 100 --duration 2m"
+```
+
+終端 B：
+
+```bash
+make staging-ws-validation
+```
+
+完整驗收 gate 請依 `06-STAGING-VALIDATION-RUNBOOK.md` 逐項勾選。
+
+## 更新 Terraform 基礎設施
+
+```bash
+make infra-plan
+make infra-apply
+```
+
+若同一輪同時更新 infra 與應用服務，可直接使用：
+
+```bash
+IMAGE_TAG=$(git rev-parse --short HEAD)
+make staging-rollout-core IMAGE_TAG=$IMAGE_TAG
+```
+
+## 暫停或縮容單一服務
+
+Makefile 目前不直接包裝 `desired-count` 變更，建議保留 AWS CLI 明確操作：
+
+```bash
 aws ecs update-service \
-  --cluster exchange-staging \
-  --service monolith \
+  --cluster $(cd deploy/terraform/environments/staging && terraform output -raw ecs_cluster_name) \
+  --service gateway \
   --desired-count 0 \
   --region ap-northeast-1
 ```
 
-重新啟動：
-```bash
-aws ecs update-service \
-  --cluster exchange-staging \
-  --service monolith \
-  --desired-count 1 \
-  --region ap-northeast-1
-```
+恢復時將 `desired-count` 改回原本值即可。
 
-> **費用提醒**：即使 ECS Task 停止，RDS、ElastiCache、NAT Gateway 仍然持續計費。若要完全停止費用，請參考 [03-TEARDOWN.md](./03-TEARDOWN.md)。
+> 只停 ECS task 不會停止 RDS、Redis、NAT Gateway、ALB 的計費。若要完全釋放費用，請改走 `03-TEARDOWN.md`。
 
----
-
-## 確認預算狀態
+## 預算與成本檢查
 
 ```bash
-# 查看目前的實際花費
 aws budgets describe-budget \
   --account-id $(aws sts get-caller-identity --query Account --output text) \
   --budget-name "exchange-staging-monthly" \
-  --region us-east-1   # Budgets API 固定在 us-east-1
+  --region us-east-1
 ```
 
-### AWS Console 確認
+## 日常操作原則
 
-1. 前往 [AWS Budgets Console](https://console.aws.amazon.com/billing/home#/budgets)
-2. 確認 `exchange-staging-monthly` 的當月花費 < $3 USD
-
----
-
-## 更新基礎建設設定
-
-若要修改 Terraform 設定（例如調整 RDS 規格）：
-
-```bash
-cd backend/
-
-# 預覽變更
-make infra-plan
-
-# 確認後套用（會有短暫停機，視修改內容而定）
-make infra-apply
-```
-
-> **警告**：某些 Terraform 變更會觸發資源銷毀 (destroy) 後重建 (replace)，例如修改 RDS 的 `engine_version`。務必看 `plan` 輸出中有無 `-/+` 標記。
+| 原則 | 說明 |
+|------|------|
+| 每次 deploy 都帶 `IMAGE_TAG` | 避免 `latest` 導致版本不可追蹤 |
+| 先看 `ecs-status` 再看 `ecs-logs` | 先確認 deployment event，再進 logs 查 root cause |
+| gateway 最後 deploy | 避免把外部流量導到尚未穩定的上游 |
+| WebSocket 驗證需與打單壓測並行 | 否則無法觀察真實 fanout 路徑 |

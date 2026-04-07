@@ -12,8 +12,24 @@ services:
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-123qwe}
       POSTGRES_DB: ${DB_NAME:-exchange}
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=300"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "synchronous_commit=off"
+      - "-c"
+      - "checkpoint_timeout=10min"
+      - "-c"
+      - "max_wal_size=2GB"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-exchange}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-exchange}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 5

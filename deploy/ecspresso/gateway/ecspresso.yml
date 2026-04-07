@@ -1,0 +1,36 @@
+# =============================================================================
+# ecspresso 設定檔 — gateway
+# =============================================================================
+# ecspresso 是 ECS 專用的部署工具，負責管理 Task Definition 與 Service 的生命週期。
+# 與 Terraform 的分工：
+#   - Terraform  → 建立 ECS Cluster、IAM Role、VPC、ALB、Redis、RDS 等基礎設施
+#   - ecspresso  → 建立與更新 ECS Task Definition + ECS Service（應用程式本身）
+#
+# `must_env` 是 ecspresso 的 Go template 函式，
+# 代表「從環境變數讀取該值，若不存在則直接 panic 停止部署」。
+# 這些變數的值在執行前需先 export（通常由 Makefile 的 staging 相關 target 負責）。
+# =============================================================================
+
+# AWS 區域，例如 ap-northeast-1（東京）
+# 來源：export AWS_REGION=ap-northeast-1  或由 Makefile 自動帶入
+region: {{ must_env `AWS_REGION` }}
+
+# ECS Cluster 名稱，由 Terraform container module 建立
+# 來源：terraform output ecs_cluster_name  →  exchange-staging
+# export ECS_CLUSTER_NAME=$(terraform -chdir=deploy/terraform/environments/staging output -raw ecs_cluster_name)
+cluster: {{ must_env `ECS_CLUSTER_NAME` }}
+
+# ECS Service 名稱（也是 Cloud Map 內部 DNS 前綴，gateway.exchange.internal）
+service: gateway
+
+# ECS Task Definition 的設定檔路徑（相對於本目錄）
+# 內含容器 image、port、secrets（SSM）、env、healthcheck、log 等設定
+task_definition: ecs-task-def.json
+
+# ECS Service 的設定檔路徑（相對於本目錄）
+# 內含副本數、網路配置（subnet/SG）、ALB 掛鉤、滾動更新策略等設定
+service_definition: ecs-service-def.json
+
+# 等待 ECS Service 穩定的超時時間
+# gateway 需等 ALB health check 通過（健康檢查 grace period 60s + 2x 健康判定）
+timeout: "10m0s"

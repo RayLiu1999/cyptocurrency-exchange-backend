@@ -1,5 +1,5 @@
 output "kafka_broker_address" {
-  description = "Kafka broker 位址（內部 DNS，monolith ECS task 使用）"
+  description = "Kafka broker 位址（內部 DNS，供應用服務 ECS tasks 使用）"
   value       = "redpanda.${var.project_name}.internal:9092"
 }
 
@@ -8,9 +8,19 @@ output "kafka_brokers_ssm_name" {
   value       = aws_ssm_parameter.kafka_brokers.name
 }
 
+output "kafka_brokers_ssm_arn" {
+  description = "KAFKA_BROKERS SSM parameter ARN"
+  value       = aws_ssm_parameter.kafka_brokers.arn
+}
+
 output "service_discovery_namespace_id" {
   description = "Cloud Map namespace ID"
   value       = aws_service_discovery_private_dns_namespace.main.id
+}
+
+output "service_discovery_namespace_name" {
+  description = "Cloud Map private DNS namespace 名稱"
+  value       = aws_service_discovery_private_dns_namespace.main.name
 }
 
 output "efs_file_system_id" {
