@@ -32,6 +32,8 @@ jobs:
             image_name: exchange-matching-engine
           - service_name: market-data-service
             image_name: exchange-market-data-service
+          - service_name: simulation-service
+            image_name: exchange-simulation-service
 
     steps:
       - name: Checkout
@@ -101,6 +103,7 @@ jobs:
           update_image "ops-repo/${OPS_REPO_PATH}/order-service/deployment.yaml" "ghcr.io/${IMAGE_OWNER}/exchange-order-service"
           update_image "ops-repo/${OPS_REPO_PATH}/matching-engine/deployment.yaml" "ghcr.io/${IMAGE_OWNER}/exchange-matching-engine"
           update_image "ops-repo/${OPS_REPO_PATH}/market-data-service/deployment.yaml" "ghcr.io/${IMAGE_OWNER}/exchange-market-data-service"
+          update_image "ops-repo/${OPS_REPO_PATH}/simulation-service/deployment.yaml" "ghcr.io/${IMAGE_OWNER}/exchange-simulation-service"
 
       - name: Commit and push GitOps changes
         run: |
