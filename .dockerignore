@@ -16,7 +16,9 @@ logs/
 
 # Project specific non-source directories
 /deploy
-/docs
+# Allow Swagger docs for Order Service
+/docs/*
+!/docs/architecture
 /scripts
 /sql
 /.agent

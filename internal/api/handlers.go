@@ -69,6 +69,7 @@ func (h *Handler) RegisterRoutesWithMiddleware(router gin.IRouter, publicLimiter
 		private.DELETE("/orders/:id", h.CancelOrder)
 		private.GET("/accounts", h.GetBalances)
 		private.POST("/test/join", h.JoinArena)
+		private.POST("/test/recharge/:user_id", h.RechargeTestUser)
 	}
 
 	// === 下單 API：最嚴格限流 + 冪等性保護 ===

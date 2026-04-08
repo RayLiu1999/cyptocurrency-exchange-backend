@@ -136,3 +136,11 @@ matching.OrderBookSnapshot:
     symbol:
       type: string
   type: object
+api.batchPlaceOrderResponse:
+  properties:
+    message:
+      type: string
+    count:
+      type: integer
+  type: object
+

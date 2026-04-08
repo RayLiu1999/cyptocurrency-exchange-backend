@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -102,7 +103,7 @@ func main() {
 
 	// Gateway 身為唯一入口，必須設定統一的 CORS 原則
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3000"},
+		AllowOrigins:     allowedOriginsFromEnv(),
 		AllowMethods:     []string{"GET", "POST", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Idempotency-Key", "X-User-ID"},
 		AllowCredentials: true,
@@ -143,6 +144,7 @@ func main() {
 		orders.Use(middleware.RateLimitMiddleware(privateLimiter))
 		orders.Use(middleware.IdempotencyMiddleware(idempStore, 24*time.Hour))
 		orders.POST("/orders", gin.WrapH(orderProxy))
+		orders.POST("/orders/batch", gin.WrapH(orderProxy))
 
 		// 模擬器控制 API（轉發至 simulation-service，無需冪等性保護）
 		simulation := apiGroup.Group("/")
@@ -182,6 +184,34 @@ func main() {
 		return
 	}
 	logger.Log.Info("gateway 已完成關閉")
+}
+
+func allowedOriginsFromEnv() []string {
+	defaultOrigins := []string{"http://localhost:5173", "http://localhost:3000"}
+	rawOrigins := strings.TrimSpace(os.Getenv("ORIGIN_URL"))
+	if rawOrigins == "" {
+		return defaultOrigins
+	}
+
+	parts := strings.Split(rawOrigins, ",")
+	origins := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		origin := strings.TrimSpace(part)
+		if origin == "" {
+			continue
+		}
+		if _, exists := seen[origin]; exists {
+			continue
+		}
+		seen[origin] = struct{}{}
+		origins = append(origins, origin)
+	}
+
+	if len(origins) == 0 {
+		return defaultOrigins
+	}
+	return origins
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, payload any) {

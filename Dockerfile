@@ -30,12 +30,15 @@ RUN apk --no-cache add ca-certificates
 
 # Copy binary from builder
 COPY --from=builder /app/main .
+# Copy only the architecture documentation (required for Swagger UI served by order-service)
+COPY --from=builder /app/docs/architecture ./docs/architecture
 
 # Expose ports based on the service (Note: EXPOSE is mostly documentation, Docker Compose maps ports)
-# 8100: order-service
-# 8101: matching-engine (health)
+# 8100: gateway
+# 8101: order-service
 # 8102: market-data-service
-# 8103: gateway
+# 8103: matching-engine
+# 8104: simulation-service
 EXPOSE 8100 8101 8102 8103
 
 # Run the binary

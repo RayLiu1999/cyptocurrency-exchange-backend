@@ -68,6 +68,34 @@
     summary: 下單 (Place Order)
     tags:
       - Orders
+/api/v1/orders/batch:
+  post:
+    consumes:
+      - application/json
+    description: 批量建立多筆買單或賣單 (適合造市商使用)
+    parameters:
+      - description: 批次訂單列表
+        in: body
+        name: orders
+        required: true
+        schema:
+          items:
+            $ref: "../definitions.yaml#/api.placeOrderRequest"
+          type: array
+    produces:
+      - application/json
+    responses:
+      "202":
+        description: Accepted
+        schema:
+          $ref: "../definitions.yaml#/api.batchPlaceOrderResponse"
+      "400":
+        description: Bad Request
+      "500":
+        description: Internal Server Error
+    summary: 批次下單 (Batch Place Orders)
+    tags:
+      - Orders
 /api/v1/orders/{id}:
   delete:
     consumes:
@@ -138,3 +166,4 @@
     summary: 取得訂單 (Get Order)
     tags:
       - Orders
+

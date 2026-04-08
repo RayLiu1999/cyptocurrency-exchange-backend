@@ -3,6 +3,8 @@
     description: 連接 WebSocket 以接收即時成交資訊 (目前無需認證)
     produces:
       - application/json
+    schemes:
+      - ws
     responses:
       "101":
         description: Switching Protocols
