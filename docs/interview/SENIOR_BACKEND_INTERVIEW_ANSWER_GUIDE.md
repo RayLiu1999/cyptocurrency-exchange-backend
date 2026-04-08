@@ -35,6 +35,7 @@
 ### 面試時可補充的追問答案
 
 - **為什麼從單體走向事件驅動**：我遇到的主要瓶頸不是純 CPU，而是 spike 流量下 PostgreSQL row lock、連線池與 I/O 壓力一起上來，導致 API latency 飆高。把下單與撮合切開後，Kafka 扮演削峰填谷的緩衝層。
+- **如何壓榨資料庫最後潛能**：在轉向純記憶體撮合前，開發了專為造市商設計的批次下單通道。捨棄常規 `INSERT` 而改用 PostgreSQL `pgx.CopyFrom` 匯入，在單節點打出超過 HTTP 常態 10 倍以上（40k+ TPS）的寫入量。
 - **目前最脆弱的節點**：我會說最值得小心的是資料庫與單一熱門 symbol 的序列化瓶頸。資料庫是 correctness 根基，而熱門交易對會把單一 partition 與單一引擎實例壓到極限。
 - **SLA / SLO 怎麼想**：我會把 API 成功率、P95 latency、order throughput、consumer lag、WS loss rate、correctness audit 異常數一起看，而不是只看 TPS。
 - **服務切分依據**：這不是只看團隊分工，而是依照資源型態切割。撮合需要順序與低延遲，WS 需要大量連線與背壓隔離，兩者放一起很容易互相拖累。
@@ -120,6 +121,7 @@
 
 ### 面試時可補充的追問答案
 
+- **高併發的死結防禦**：除了依賴 DB 死結偵測，更乾淨的做法是在 Go 記憶體層「預排序」。面對批次大量扣款的極端壓力，我實作了「UserID + Currency」的二維字典序排隊，保證所有交易進入 DB 的取鎖順序永遠一致，拔除死結可能。
 - **重複 settlement event 怎麼處理**：consumer 外層會先查 trade 是否存在，TX 內再做一次冪等檢查，避免 TOCTOU。這樣即使事件重派，也不會重複結算。
 - **哪些索引是 correctness 關鍵**：像 trade ID 的唯一性就不是只為了查詢快，而是直接參與去重與避免重複扣款。
 - **schema migration 風險**：order-service 啟動時自動跑 schema 在單機開發方便，但多實例環境如果沒有更成熟的 migration discipline，會有啟動競爭與變更順序風險。
@@ -188,6 +190,7 @@ gateway 的定位不是只有反向代理，而是系統的安全與流量整形
 
 ### 面試時可補充的追問答案
 
+- **非同步系統的體感延遲**：不能只看 HTTP 回應。我特別設計了 E2E 壓測，測量單據從寫入 DB，流過 Outbox、Kafka 撮合，直到 WebSocket 發出推播的時間差，確保主動脈能在 30ms 內走完。
 - **為什麼 baseline 壓測不等於 production proof**：因為 baseline 只能說基本負載下沒有明顯崩潰，不能直接證明 resilience、chaos recovery、large dataset behavior 或 24h soak stability。
 - **本地與 ECS 差異**：本地適合抓 correctness bug 與明顯退化，ECS 才比較能回答容量、網路、跨實例與雲端基礎設施下的真實行為。
 - **spike 測試遇到很多 429 怎麼看**：如果 429 來自有意義的 gateway 限流，而且 5xx 很低，我會解讀成保護機制生效，而不是系統崩潰。

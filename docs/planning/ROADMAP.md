@@ -9,6 +9,7 @@
 **目標：確保目前的非同步微服務架構在壓力下不僅能正常運作，且具備可容錯性。**
 - [ ] **本地測試 (Local Testing)**: 使用 k6 或其他工具在本地進行高併發壓測，觀察 Redis 緩存與 Kafka Message Queue 的吞吐量與延遲。
 - [ ] **ECS 測試部署**: 將服務短期部署至 AWS ECS 進行真實環境的壓力測試。此環境主要用於驗證雲端網路、IAM 權限與基礎設施效能。
+- [ ] **ECS 重整任務執行**: 依照 [deploy/docs/04-ECS-MICROSERVICES-EXECUTION-CHECKLIST.md](../../deploy/docs/04-ECS-MICROSERVICES-EXECUTION-CHECKLIST.md) 逐步完成 microservice deploy 重建、staging 驗證與 production-ready backlog 收斂。
 - [ ] **瓶頸分析與調優**: 找出系統的效能瓶頸（如 Database 連線數、Kafka 消費速度）並進行調整。
 
 ## Phase 2: VPS K3s 基礎部署 (Mid-term)

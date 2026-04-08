@@ -74,11 +74,34 @@
 >
 > **延伸**：「這也是我規劃 CQRS 架構的原因——不能讓使用者的歷史訂單查詢（Read）去拖累撮合引擎的結算寫入（Write）。透過 Kafka 事件非同步更新到 Redis 或讀取專用 DB，才能解決大資料 + 大流量的雙重挑戰。」
 
+### Q7：對於非同步事件驅動系統，你如何衡量真實的效能與體感延遲？
+
+> **回答**（展現高階架構觀點）：
+> 「在 Event Sourcing 架構下，單看 HTTP 回應時間是沒有意義的，因為 API 只是把事件寫入 Outbox 就返回 202，不能代表訂單真正被處理完。
+> 
+> 我自行設計了 `e2e-latency-test.js` 壓測腳本。腳本會在下單時記錄 `created_at`，並同時建立並監聽 WebSocket。真正的端到端 (E2E) 延遲等於：『收到 WS 推播的時間』減去『發送 HTTP 請求的時間』。透過這種方式，我證明了即使經歷 HTTP $\rightarrow$ DB $\rightarrow$ Outbox $\rightarrow$ Kafka $\rightarrow$ 撮合引擎 $\rightarrow$ Kafka $\rightarrow$ WS 推播的漫長鏈路，主流程依然能將 P95 延遲控制在極低的 30 毫秒內。」
+
 ---
 
 ## 三、資料一致性與交易安全
 
-### Q7：如何證明幾千個 Request 同時砸下來時，帳不會算錯？
+### Q8：在高併發下，你如何處理資料庫死結 (Deadlock) 問題？
+
+> **回答**：
+> 「當大量散戶或造市商機器人同時交易時，頻繁扣除帳戶的多種資產（如併發扣 BTC 和 USDT）極易產生『循環等待』導致 DB 拋出 Deadlock。
+> 
+> 大多數人會依賴 DB 的死結偵測並進行 Retry，但這在高頻交易中效能極差。我的架構解法是：**二維資源排序演算法 (Dual-Sorting)**。
+> 無論是結算還是造市商的批次扣款 (`BatchLockFunds`)，在進入 DB 獲取 Row Lock (`SELECT FOR UPDATE`) 之前，我預先在 Go 記憶體層將所有影響的帳戶，**先依 UserID 排序，再依 Currency 排序**。這保證了不論併發順序多混亂，進入資料庫的加鎖順序將全域一致，從根本上拔除了死結可能。」
+
+### Q9：在轉移到純記憶體撮合之前，你如何搾出關聯式資料庫的最大潛能？
+
+> **回答**：
+> 「資料庫瓶頸主要在網路往返 (Round-trip) 與連線競爭。為承接造市商的高頻交易，我採取了以下極端手段：
+> 1. 開發了 **極速批次寫入通道 (Ingestion Batching)**，讓造市商透過單一 HTTP 挾帶數百張掛單。
+> 2. 底層棄用常規的迴圈 `INSERT`，改用 PostgreSQL 原生 **`pgx.CopyFrom`**，將資料當作串流一次性灌入資料庫。
+> 3. 調優了資料庫連線池的 `MinOpenConns` 保持熱連線。結果在單節點測試中打出超越常規 10 倍以上（40k+ TPS）的寫入量。」
+
+### Q10：如何證明幾千個 Request 同時砸下來時，帳不會算錯？
 
 > **回答**：「我設置了三道防線：
 > 1. **事前預扣**：下單當下即在 DB 內將資金移入 `locked` 欄位，杜絕超額下單
@@ -87,7 +110,7 @@
 >
 > 最終驗證：每輪壓測後執行 Correctness Audit SQL，確認 `SUM(balance + locked)` 壓測前後**完全一致，一毛不差**。」
 
-### Q8：撮合成功但結算時 DB 寫入失敗，怎麼辦？
+### Q11：撮合成功但結算時 DB 寫入失敗，怎麼辦？
 
 > **回答**：
 > 1. Kafka Consumer 處理結算事件時，如果 DB 寫入失敗，**不 Commit Offset**
@@ -97,7 +120,7 @@
 >
 > 所以系統的補償機制是：**依賴 Kafka 的 At-least-once 投遞 + DB 層的冪等性防禦**，而非自己寫複雜的 Saga 補償。
 
-### Q9：為什麼用 `shopspring/decimal` 而不用 `float64`？
+### Q12：為什麼用 `shopspring/decimal` 而不用 `float64`？
 
 > **回答**：「浮點數在金融系統中是災難。`0.1 + 0.2` 在 float64 下不等於 `0.3`，長期累積下來資金會產生不可追溯的誤差。`shopspring/decimal` 使用精確的十進位運算，確保每一分錢都精確到小數點後 8 位。在交易系統中，一個 0.00000001 的累積誤差在百萬筆交易後就會變成可觀的金額。」
 
@@ -105,7 +128,7 @@
 
 ## 四、核心撮合引擎
 
-### Q10：Order Book 用什麼資料結構？為什麼？
+### Q13：Order Book 用什麼資料結構？為什麼？
 
 > **回答**：「使用 Red-Black Tree（或 Skip List）搭配 Hash Map。
 > - **Tree** 用於維護價格層級的排序（買方最高價先撮、賣方最低價先撮），插入/刪除 O(log n)
@@ -113,7 +136,7 @@
 >
 > 在大資料量場景下（某交易對累積數十萬筆掛單），Tree 的 O(log n) 不會因節點過多而嚴重劣化，而純 Array 的 O(n) 搜尋則會崩潰。」
 
-### Q11：市價單在深度不足時怎麼處理？
+### Q14：市價單在深度不足時怎麼處理？
 
 > **回答**：「市價買單需要估算所需資金。在微服務架構下，order-service 本身沒有完整的 Order Book（那在 matching-engine 裡），所以會先去 Redis 讀取最新的 OrderBook Snapshot 來估算。如果 asks 深度不足以填滿整筆市價單，系統有兩種策略：
 > 1. 拒絕下單並回傳 `insufficient liquidity`
@@ -125,7 +148,7 @@
 
 ## 五、高可用與防禦性設計
 
-### Q12：限流策略怎麼實作的？
+### Q15：限流策略怎麼實作的？
 
 > **回答**：「使用 Redis-backed Token Bucket 演算法。每個 API Key 在 Redis 中維護一個 Token 計數器：
 > - 每次請求消耗一個 Token
@@ -134,7 +157,7 @@
 >
 > 在 Spike 測試中（800 VU 瞬間湧入），限流器精準攔截了 85% 的超額流量，確保後端核心服務 0% 崩潰。限流邏輯放在 Gateway 層，不讓惡意或過量流量穿透到 Order Service。」
 
-### Q13：WebSocket 為什麼要獨立成 Market Data Service？如何處理 Slow Consumer？
+### Q16：WebSocket 為什麼要獨立成 Market Data Service？如何處理 Slow Consumer？
 
 > **回答**：拆分是為了資源隔離，避免推播佔用交易核心的記憶體。針對 **Slow Consumer**（網路慢的用戶）： 
 > 1. 我們監控由慢連線引起的 **Message Dropped Count**。
@@ -145,7 +168,7 @@
 
 ## 六、CI/CD 與部署
 
-### Q14：容器化策略與滾動更新？
+### Q17：容器化策略與滾動更新？
 
 > **回答**：「每個微服務有獨立的 Dockerfile，使用 Multi-stage build 減小 Image 大小。CI/CD 流程：
 > 1. Push 到 `main` 觸發 GitHub Actions

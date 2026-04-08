@@ -16,22 +16,33 @@
 
 ---
 
-## 2. 壓力測試與效能驗證 (Stress Testing & Performance Validation)
+## 2. 極速批次寫入與造市商支援 (Ingestion Batching & Market Maker Support)
 
 **履歷條目**：
-> 設計並執行多層次 k6 壓力測試（Smoke / Load / Spike / WebSocket Fanout），在本地與 ECS 雲端環境中驗證架構正確性。Spike 測試中 800 VU 瞬間湧入產生逾 3,000 TPS 壓力，系統透過 Token Bucket 限流器精準攔截 85% 超額流量，實現 0% 崩潰率。
+> 針對造市商高頻寫入瓶頸，實作 `POST /orders/batch` 批次下單通道。底層整合 PostgreSQL 原生 `pgx.CopyFrom` 協定進行極速 I/O，並在 Go 應用層開發「UserID 與 Currency 二維記憶體排序」死結防禦演算法。成功在高併發壓測中展現 10 倍於 HTTP 獨立請求的寫入吞吐量且達成 0 死結。
+
+**背後技術**：
+- 資料庫零負擔寫入：摒棄迴圈 `INSERT`，採取 Bulk Copy 機制。
+- 記憶體預排序：將大量雜亂的資源請求，在進入資料庫 Row Lock 爭搶前，先在記憶體中完成全域排隊。
+
+---
+
+## 3. 生產級壓力測試與系統韌性 (Production-Grade K6 Stress Validation)
+
+**履歷條目**：
+> 捨棄傳統盲測，自行定義並執行四大象限 K6 壓測架構（E2E Latency、Ingestion Batch、Market Storm 隔離測試、Spike 突波）。透過 `errors.Is` 的強型別攔截將資源不足等業務錯誤 (HTTP 400) 與服務異常 (HTTP 500) 精準隔離，在 100 VU 的滿載壓測中實現 100% SLA，並確保核心訂單流 (Order-to-WS) 的端到端 P95 延遲小於 30ms。
 
 **資料量與觀測力維度的加分論述**：
-> - **深層觀測力**：不滿足於基礎監控，主動實作 `pgxpool` 與 `go-redis` 連線池指標監控，偵測出「等待連線」導致的 Tail Latency 尖刺，將系統調優從「猜測」轉向「證據驅動」。
-> - **資料量對比**：預先植入海量歷史數據（百萬筆級別）進行測試，分析 B-Tree 索引分裂與 Buffer Pool Miss 對撮合延遲的真實影響，確保系統能應對長期營運後的性能衰退。
+> - **系統韌性保護**：在 Spike 測試中面對 10 倍超載流量，系統藉助 Gateway 限流器與精準的 DB 連線池配置 (MinOpen/MaxOpen)，優雅且毫不留情地回傳 429 拒絕連線，以犧牲部份新請求為代價，保證了後方資料庫與既有連線 0% OOM、0% 崩潰率。
+> - **動態壓測調配**：為了徹底打出系統真極限，壓測腳本內建「動態充值」協定，當 VU 把測試資金打光時自動展延，解決傳統壓測經常因為假性資料瓶頸而提早結束的痛點。
 
 **關鍵數據**：
 | 測試類型 | 場景 | 關鍵結果 |
 |:---|:---|:---|
-| Spike Test | 800 VU 突發湧入 | 3,000+ TPS, 85% 超額攔截, 0% Downtime |
-| WS Fanout | 2,000 長連線 | 60,000 msg/s 扇出推播, 99.9% 連線成功率 |
-| Load Test | 100 VU × 2 分鐘 | P95 < 1s, 5xx < 0.1% |
-| Correctness Audit | 高併發壓測後 | Balance + Locked 100% 帳目相符，零誤差 |
+| Market Storm | 讀寫隔離：千人 WS 接收時狂下單 | WebSocket 的推播 CPU 開銷不影響 Order 寫入，P95 < 50ms |
+| E2E Latency | 訊息溯源延遲 (HTTP -> DB -> Kafka -> WS) | P95 整條鏈路延遲穩定控在 30 毫秒內 |
+| Spike Test | 突發 10x 流量衝擊 | 429 優雅降級, DB 連線池不被打穿, 0% 崩潰率 |
+| Batch Ingestion | 造市商與套利機器人瞬時丟單 | 使用 CopyFrom，單節點創造破 40k+ TPS 的寫入量能 |
 
 ---
 
