@@ -2,6 +2,8 @@
 
 本文件說明如何完整移除 staging 的 ECS 微服務與 Terraform 資源，避免 NAT Gateway、RDS、Redis、ALB 與 Fargate 持續計費。
 
+> 若你已經在 AWS Console 手動刪過部分資源，導致 Terraform state 與實際雲端資源脫節，請優先改看 `10-MANUAL-ZERO-COST-DELETION-CHECKLIST.md`。
+
 ## 高風險資源
 
 | 資源 | 來源 | 為何要優先確認 |

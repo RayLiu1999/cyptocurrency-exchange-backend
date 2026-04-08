@@ -15,6 +15,7 @@
 | [07-PRODUCTION-READY-BACKLOG.md](./docs/07-PRODUCTION-READY-BACKLOG.md) | production-ready backlog、go / no-go gate | staging 驗證後 |
 | [08-IAC-AND-ECSPRESSO-GUIDE.md](./docs/08-IAC-AND-ECSPRESSO-GUIDE.md) | Terraform 與 ecspresso 的分工、參數來源與部署機制 | 需要理解整體 deploy stack 時 |
 | [09-STAGING-FIRST-DEPLOY-TROUBLESHOOTING.md](./docs/09-STAGING-FIRST-DEPLOY-TROUBLESHOOTING.md) | 首輪 staging 部署實際故障、根因與修復紀錄 | 首次部署失敗或需要復盤時 |
+| [10-MANUAL-ZERO-COST-DELETION-CHECKLIST.md](./docs/10-MANUAL-ZERO-COST-DELETION-CHECKLIST.md) | 手動刪除資源時的零費用清單、驗證順序與殘留盤點 | Terraform state drift 或手動清除時 |
 
 ## 建議閱讀順序
 
@@ -23,8 +24,9 @@
 3. 第一次部署時照 `01-QUICKSTART.md` 操作。
 4. 部署完成後，依 `06-STAGING-VALIDATION-RUNBOOK.md` 做驗收。
 5. 若首次部署失敗，優先對照 `09-STAGING-FIRST-DEPLOY-TROUBLESHOOTING.md`。
-6. 若需要理解 Terraform 與 ecspresso 的責任邊界，再看 `08-IAC-AND-ECSPRESSO-GUIDE.md`。
-7. 完成驗收後，依 `07-PRODUCTION-READY-BACKLOG.md` 排下一輪強化工作。
+6. 若已手動刪除部分 AWS 資源，改看 `10-MANUAL-ZERO-COST-DELETION-CHECKLIST.md`。
+7. 若需要理解 Terraform 與 ecspresso 的責任邊界，再看 `08-IAC-AND-ECSPRESSO-GUIDE.md`。
+8. 完成驗收後，依 `07-PRODUCTION-READY-BACKLOG.md` 排下一輪強化工作。
 
 ## 架構概覽
 
