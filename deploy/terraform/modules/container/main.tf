@@ -169,3 +169,23 @@ resource "aws_iam_role_policy" "ecs_task_logs" {
     }]
   })
 }
+
+# 允許開發人員透過 SSM (ECS Exec) 進入容器內部的 Shell
+resource "aws_iam_role_policy" "ecs_execute_command" {
+  name = "ecs-execute-command"
+  role = aws_iam_role.ecs_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "ssmmessages:CreateControlChannel",
+        "ssmmessages:CreateDataChannel",
+        "ssmmessages:OpenControlChannel",
+        "ssmmessages:OpenDataChannel"
+      ]
+      Resource = "*"
+    }]
+  })
+}
