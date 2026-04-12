@@ -8,56 +8,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-/*
-=== TDD TODO List: Matching Engine ===
-
-Phase 1: 基本結構 (Foundation) ✅ DONE
-- [x] 1.1 建立 OrderBook 結構，能儲存買賣訂單
-- [x] 1.2 新增訂單到 OrderBook (買單/賣單分開儲存)
-- [x] 1.3 空 OrderBook 收到訂單，不應產生成交
-
-Phase 2: 基本成交 (Basic Matching) ✅ DONE
-- [x] 2.1 買單價格 >= 最低賣單價格時，應產生成交
-- [x] 2.2 成交價格 = Maker 價格
-- [x] 2.3 成交後，訂單從 OrderBook 移除
-
-Phase 3: 價格優先 (Price Priority) ✅ DONE
-- [x] 3.1 賣方：價格低的優先成交
-- [x] 3.2 買方：價格高的優先成交
-
-Phase 4: 時間優先 (Time Priority - FIFO) ✅ DONE
-- [x] 4.1 同價位時，先進場的訂單優先成交
-
-Phase 5: 部分成交 (Partial Fill) ✅ DONE
-- [x] 5.1 Taker 數量 > Maker 時，連續成交多個 Maker
-- [x] 5.2 Taker 數量 < Maker 時，Maker 部分成交
-- [x] 5.3 剩餘數量留在 OrderBook
-
-Phase 6: 連續成交 (Multiple Matches) ✅ DONE
-- [x] 6.1 一個大單與多個對手方連續成交
-
-Phase 1.5a: 市價單 (Market Order) ✅ DONE
-- [x] 市價買單吃掉最低價賣單
-- [x] 市價賣單吃掉最高價買單
-- [x] 市價單連續成交多個 Maker
-- [x] 市價單數量 > 訂單簿深度時，部分成交
-
-Phase 1.5b: 多交易對 (Multi-Symbol) ✅ DONE
-- [x] 不同交易對的訂單不會互相撮合
-- [x] 同交易對可正常撮合
-- [x] GetEngine 重複呼叫應返回同一個 Engine
-
-Phase 7: 邊界條件 (Edge Cases) ✅ DONE
-- [x] 7.1 價格不匹配時，不成交
-- [x] 7.2 自成交防護
-
-=====================================
-*/
-
 // ============================================================
 // Phase 1: 基本結構 ✅
 // ============================================================
 
+// TestOrderBook_NewOrderBook_CreatesEmptyBook 測試建立空的訂單簿
 func TestOrderBook_NewOrderBook_CreatesEmptyBook(t *testing.T) {
 	book := NewOrderBook("BTC-USD")
 
@@ -67,6 +22,7 @@ func TestOrderBook_NewOrderBook_CreatesEmptyBook(t *testing.T) {
 	assert.Equal(t, 0, book.AskCount())
 }
 
+// TestOrderBook_AddOrder_BuyOrderGoesToBids 測試買單加入訂單簿
 func TestOrderBook_AddOrder_BuyOrderGoesToBids(t *testing.T) {
 	book := NewOrderBook("BTC-USD")
 	order := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1))
@@ -77,6 +33,7 @@ func TestOrderBook_AddOrder_BuyOrderGoesToBids(t *testing.T) {
 	assert.Equal(t, 0, book.AskCount())
 }
 
+// TestOrderBook_AddOrder_SellOrderGoesToAsks 測試賣單加入訂單簿
 func TestOrderBook_AddOrder_SellOrderGoesToAsks(t *testing.T) {
 	book := NewOrderBook("BTC-USD")
 	order := NewOrder(uuid.New(), uuid.New(), SideSell, decimal.NewFromInt(100), decimal.NewFromInt(1))
@@ -87,6 +44,7 @@ func TestOrderBook_AddOrder_SellOrderGoesToAsks(t *testing.T) {
 	assert.Equal(t, 1, book.AskCount())
 }
 
+// TestEngine_EmptyBook_NoTrades 測試空訂單簿不產生成交
 func TestEngine_EmptyBook_NoTrades(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 	order := NewOrder(uuid.New(), uuid.New(), SideBuy, decimal.NewFromInt(100), decimal.NewFromInt(1))
@@ -101,6 +59,7 @@ func TestEngine_EmptyBook_NoTrades(t *testing.T) {
 // Phase 2: 基本成交 ✅
 // ============================================================
 
+// TestEngine_BuyPriceMatchesSellPrice_TradeExecuted 測試買單價格匹配賣單價格時產生成交
 func TestEngine_BuyPriceMatchesSellPrice_TradeExecuted(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
@@ -117,6 +76,7 @@ func TestEngine_BuyPriceMatchesSellPrice_TradeExecuted(t *testing.T) {
 	assert.Equal(t, decimal.NewFromInt(1), trades[0].Quantity, "成交數量應為 1")
 }
 
+// TestEngine_TradePrice_EqualsMakerPrice 測試成交價格等於 Maker 價格
 func TestEngine_TradePrice_EqualsMakerPrice(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
@@ -133,6 +93,7 @@ func TestEngine_TradePrice_EqualsMakerPrice(t *testing.T) {
 	assert.Equal(t, decimal.NewFromInt(100), trades[0].Price, "成交價格應為 Maker 價格 100")
 }
 
+// TestEngine_AfterFullMatch_OrdersRemovedFromBook 測試完全成交後訂單從訂單簿移除
 func TestEngine_AfterFullMatch_OrdersRemovedFromBook(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
@@ -151,7 +112,6 @@ func TestEngine_AfterFullMatch_OrdersRemovedFromBook(t *testing.T) {
 // Phase 3: 價格優先
 // ============================================================
 
-// TODO 3.1: 賣方價格低的優先成交
 func TestEngine_PricePriority_LowestAskMatchesFirst(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
@@ -171,7 +131,7 @@ func TestEngine_PricePriority_LowestAskMatchesFirst(t *testing.T) {
 	assert.Equal(t, 1, engine.OrderBook().AskCount(), "價格 102 的賣單應還在")
 }
 
-// TODO 3.2: 買方價格高的優先成交
+// TestEngine_PricePriority_HighestBidMatchesFirst 測試買單價格高的優先成交
 func TestEngine_PricePriority_HighestBidMatchesFirst(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
@@ -195,7 +155,7 @@ func TestEngine_PricePriority_HighestBidMatchesFirst(t *testing.T) {
 // Phase 4: 時間優先 (FIFO) ✅
 // ============================================================
 
-// TODO 4.1: 同價位時，先進場的訂單優先成交
+// TestEngine_TimePriority_FirstOrderMatchesFirst 測試同價位時，先進場的訂單優先成交
 func TestEngine_TimePriority_FirstOrderMatchesFirst(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
@@ -219,7 +179,7 @@ func TestEngine_TimePriority_FirstOrderMatchesFirst(t *testing.T) {
 // Phase 5: 部分成交
 // ============================================================
 
-// TODO 5.1: Taker 數量 > Maker 時，連續成交多個 Maker
+// TestEngine_PartialFill_TakerLargerThanMaker 測試 Taker 數量 > Maker 時，連續成交多個 Maker
 func TestEngine_PartialFill_TakerLargerThanMaker(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
@@ -241,7 +201,7 @@ func TestEngine_PartialFill_TakerLargerThanMaker(t *testing.T) {
 	assert.Equal(t, 0, engine.OrderBook().BidCount(), "買單完全成交，不應進入訂單簿")
 }
 
-// TODO 5.2: Taker 數量 < Maker 時，Maker 部分成交
+// TestEngine_PartialFill_TakerSmallerThanMaker 測試 Taker 數量 < Maker 時，Maker 部分成交
 func TestEngine_PartialFill_TakerSmallerThanMaker(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
@@ -263,7 +223,7 @@ func TestEngine_PartialFill_TakerSmallerThanMaker(t *testing.T) {
 	assert.Equal(t, decimal.NewFromInt(7), remainingSell.Quantity, "賣單剩餘數量應為 7")
 }
 
-// TODO 5.3: 剩餘數量留在 OrderBook
+// TestEngine_PartialFill_TakerRemainsInBook 測試 Taker 數量 < Maker 時，Maker 部分成交
 func TestEngine_PartialFill_TakerRemainsInBook(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
@@ -290,7 +250,7 @@ func TestEngine_PartialFill_TakerRemainsInBook(t *testing.T) {
 // Phase 6: 連續成交
 // ============================================================
 
-// TODO 6.1: 一個大單與多個對手方連續成交
+// TestEngine_MultipleMatches_LargeOrderMatchesMultiple 測試一個大單與多個對手方連續成交
 func TestEngine_MultipleMatches_LargeOrderMatchesMultiple(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
@@ -319,7 +279,7 @@ func TestEngine_MultipleMatches_LargeOrderMatchesMultiple(t *testing.T) {
 // Phase 1.5: 市價單 (Market Order)
 // ============================================================
 
-// TODO 1.5.1: 市價買單吃掉最低價賣單
+// TestEngine_MarketBuyOrder_MatchesLowestAsk 測試市價買單吃掉最低價賣單
 func TestEngine_MarketBuyOrder_MatchesLowestAsk(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
@@ -337,7 +297,7 @@ func TestEngine_MarketBuyOrder_MatchesLowestAsk(t *testing.T) {
 	assert.Equal(t, 1, engine.OrderBook().AskCount(), "價格 102 的賣單應還在")
 }
 
-// TODO 1.5.2: 市價賣單吃掉最高價買單
+// TestEngine_MarketSellOrder_MatchesHighestBid 測試市價賣單吃掉最高價買單
 func TestEngine_MarketSellOrder_MatchesHighestBid(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
@@ -355,7 +315,7 @@ func TestEngine_MarketSellOrder_MatchesHighestBid(t *testing.T) {
 	assert.Equal(t, 1, engine.OrderBook().BidCount(), "價格 98 的買單應還在")
 }
 
-// TODO 1.5.3: 市價單連續成交多個 Maker
+// TestEngine_MarketOrder_MatchesMultipleMakers 測試市價單連續成交多個 Maker
 func TestEngine_MarketOrder_MatchesMultipleMakers(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
@@ -376,7 +336,7 @@ func TestEngine_MarketOrder_MatchesMultipleMakers(t *testing.T) {
 	assert.Equal(t, 1, engine.OrderBook().AskCount(), "應剩一個賣單")
 }
 
-// TODO 1.5.4: 市價單數量 > 訂單簿深度時，部分成交
+// TestEngine_MarketOrder_PartialFillWhenInsufficientLiquidity 測試市價單數量 > 訂單簿深度時，部分成交
 func TestEngine_MarketOrder_PartialFillWhenInsufficientLiquidity(t *testing.T) {
 	engine := NewEngine("BTC-USD")
 
@@ -399,7 +359,7 @@ func TestEngine_MarketOrder_PartialFillWhenInsufficientLiquidity(t *testing.T) {
 // Phase 1.5: 多交易對支援 (Multi-Symbol)
 // ============================================================
 
-// TODO 3.1: 不同交易對的訂單不會互相撮合
+// TestEngineManager_DifferentSymbols_NoMatch 測試不同交易對的訂單不會互相撮合
 func TestEngineManager_DifferentSymbols_NoMatch(t *testing.T) {
 	manager := NewEngineManager()
 
@@ -418,7 +378,7 @@ func TestEngineManager_DifferentSymbols_NoMatch(t *testing.T) {
 	assert.Equal(t, 1, ethEngine.OrderBook().BidCount(), "ETH 買單應進入訂單簿")
 }
 
-// TODO 3.2: 同交易對可正常撮合
+// TestEngineManager_SameSymbol_MatchesCorrectly 測試同交易對可正常撮合
 func TestEngineManager_SameSymbol_MatchesCorrectly(t *testing.T) {
 	manager := NewEngineManager()
 
@@ -437,7 +397,7 @@ func TestEngineManager_SameSymbol_MatchesCorrectly(t *testing.T) {
 	assert.Equal(t, 0, engine.OrderBook().BidCount())
 }
 
-// TODO 3.3: GetEngine 重複呼叫應返回同一個 Engine
+// TestEngineManager_GetEngine_ReturnsSameInstance 測試 GetEngine 重複呼叫應返回同一個 Engine
 func TestEngineManager_GetEngine_ReturnsSameInstance(t *testing.T) {
 	manager := NewEngineManager()
 
@@ -451,7 +411,7 @@ func TestEngineManager_GetEngine_ReturnsSameInstance(t *testing.T) {
 // Phase 7: 邊界條件 (Edge Cases)
 // ============================================================
 
-// 7.1 買價低於賣價時，不得成交，雙方訂單應保留在訂單簿
+// TestEngine_PriceMismatch_NoTradeExecuted 測試買價低於賣價時，不得成交，雙方訂單應保留在訂單簿
 func TestEngine_PriceMismatch_NoTradeExecuted(t *testing.T) {
 	// Arrange
 	engine := NewEngine("BTC-USD")
@@ -472,7 +432,7 @@ func TestEngine_PriceMismatch_NoTradeExecuted(t *testing.T) {
 	assert.Equal(t, 1, engine.OrderBook().BidCount(), "買單應保留在訂單簿")
 }
 
-// 7.2 同一個 user_id 的買賣單不可彼此成交（自成交防護）
+// TestEngine_SelfTrade_Prevented 測試同一個 user_id 的買賣單不可彼此成交（自成交防護）
 func TestEngine_SelfTrade_Prevented(t *testing.T) {
 	// Arrange
 	engine := NewEngine("BTC-USD")
@@ -489,7 +449,7 @@ func TestEngine_SelfTrade_Prevented(t *testing.T) {
 	// Assert
 	assert.Empty(t, trades, "自成交防護：不得對自己的訂單成交")
 	assert.Equal(t, 1, engine.OrderBook().AskCount(), "賣單應保留在訂單簿")
-	
+
 	// 因為觸發了 Cancel Newest 的 STP 機制，買單的 Quantity 被設為 0，所以不應進入訂單簿
 	assert.Equal(t, 0, engine.OrderBook().BidCount(), "被拒絕的買單因 STP 被取消，不進入訂單簿")
 }
@@ -499,22 +459,24 @@ func TestEngine_SelfTrade_Prevented(t *testing.T) {
 // 對標 AXS 專案的 Processor Throughput
 // ============================================================
 
+// BenchmarkEngineMatch 測試引擎的撮合效能
 func BenchmarkEngineMatch(b *testing.B) {
 	engine := NewEngine("BTC-USD")
 	makerID := uuid.New()
 	takerID := uuid.New()
-	
-	// 為了測量「純粹的引擎吞吐量」，我們預先丟一個超巨大的 Maker 單進去，
-	// 然後讓 N 個 Taker 單不斷去撞擊它。
-	// 這排除了 OrderBook 被吃光的 Edge Case，專注於測量核心演算法效能。
-	bigSell := NewOrder(uuid.New(), makerID, SideSell, decimal.NewFromInt(50000), decimal.NewFromInt(int64(b.N+1000)))
-	engine.Process(bigSell)
 
-	// 重置計時器，排除初始化時間
+	// 假設價格與數量固定，直接在迴圈外分配好記憶體 (不計入時間)
+	price := decimal.NewFromInt(50000)
+	qty := decimal.NewFromInt(1)
+
+	bigSell := NewOrder(uuid.New(), makerID, SideSell, price, decimal.NewFromInt(int64(b.N+1000)))
+	engine.Process(bigSell)
+	// ====== 從這條線以下才開始真正計時測量 ======
 	b.ResetTimer()
-	
+
 	for i := 0; i < b.N; i++ {
-		buyOrder := NewOrder(uuid.New(), takerID, SideBuy, decimal.NewFromInt(50000), decimal.NewFromInt(1))
+		// 傳入 uuid.UUID{} (空 UUID) 來避開 Syscall 隨機數產生的巨大延遲
+		buyOrder := NewOrder(uuid.UUID{}, takerID, SideBuy, price, qty)
 		engine.Process(buyOrder)
 	}
 }

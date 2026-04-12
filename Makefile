@@ -1,4 +1,4 @@
-.PHONY: build build-server build-gateway build-order-service build-matching-engine build-market-data-service build-simulation-service test test-integration test-race test-all test-smoke test-load test-spike test-coverage lint vuln fmt tidy clean dev-up dev-down dev-logs test-up test-down test-build test-logs test-infra-up test-infra-down db-migrate db-seed db-fresh bootstrap-init bootstrap-plan bootstrap-apply aws-login docker-build-push docker-build-push-core infra-init infra-plan infra-apply infra-destroy show-staging-outputs ecs-create ecs-delete ecs-deploy ecs-rollback ecs-status ecs-status-all ecs-logs ecs-exec ecs-create-core ecs-deploy-core ecs-delete-core staging-create-core staging-rollout-core staging-health staging-smoke-test staging-load-test staging-spike-test staging-baseline-test deploy-all destroy-all check-ecs-service help
+.PHONY: build build-server build-gateway build-order-service build-matching-engine build-market-data-service build-simulation-service test test-integration test-race test-all test-smoke test-load test-spike test-coverage bench bench-pprof pprof-cpu pprof-mem lint vuln fmt tidy clean dev-up dev-down dev-logs test-up test-down test-build test-logs test-infra-up test-infra-down db-migrate db-seed db-fresh bootstrap-init bootstrap-plan bootstrap-apply aws-login docker-build-push docker-build-push-core infra-init infra-plan infra-apply infra-destroy show-staging-outputs ecs-create ecs-delete ecs-deploy ecs-rollback ecs-status ecs-status-all ecs-logs ecs-exec ecs-create-core ecs-deploy-core ecs-delete-core staging-create-core staging-rollout-core staging-health staging-smoke-test staging-load-test staging-spike-test staging-baseline-test deploy-all destroy-all check-ecs-service help
 
 # 變數定義
 BUILD_DIR=.
@@ -93,6 +93,39 @@ test-coverage: ## 產生測試覆蓋率報告
 	@echo "✅ 覆蓋率報告: coverage.html"
 
 # ==============================================================================
+# 效能分析 (Engine Benchmark & pprof)
+# ==============================================================================
+
+# 效能分析相關變數
+BENCH_PKG    ?= ./internal/matching/engine/...
+BENCH_FILTER ?= BenchmarkEngineMatch
+BENCH_TIME   ?= 3s
+PPROF_DIR    ?= internal/matching/engine
+PPROF_PORT   ?= 8081
+
+bench: ## 執行引擎基準測試，輸出 ns/op 與 allocs/op
+	@echo "🏎️  執行 Matching Engine Benchmark (benchtime=$(BENCH_TIME))..."
+	@cd $(PPROF_DIR) && go test -bench=$(BENCH_FILTER) -benchmem -benchtime=$(BENCH_TIME)
+
+bench-pprof: ## 執行基準測試並產出 CPU / Memory profile 檔案
+	@echo "📊 執行 Benchmark 並產出 pprof profile 至 $(PPROF_DIR)/..."
+	@cd $(PPROF_DIR) && go test \
+		-bench=$(BENCH_FILTER) \
+		-benchtime=$(BENCH_TIME) \
+		-cpuprofile=cpu.prof \
+		-memprofile=mem.prof
+	@echo "✅ 完成！profile 檔案位於 $(PPROF_DIR)/cpu.prof 與 $(PPROF_DIR)/mem.prof"
+	@echo "💡 可執行 'make pprof-cpu' 或 'make pprof-mem' 開啟網頁分析"
+
+pprof-cpu: ## 開啟 CPU profile 網頁火焰圖 (預設 port 8081)
+	@echo "🔥 開啟 CPU 火焰圖於 http://localhost:$(PPROF_PORT) ..."
+	@go tool pprof -http=:$(PPROF_PORT) $(PPROF_DIR)/cpu.prof
+
+pprof-mem: ## 開啟 Memory profile 網頁火焰圖 (預設 port 8081)
+	@echo "🧠 開啟 Memory 分析圖於 http://localhost:$(PPROF_PORT) ..."
+	@go tool pprof -http=:$(PPROF_PORT) $(PPROF_DIR)/mem.prof
+
+# ==============================================================================
 # 測試用設施管理 (Infrastructure for Testing/CI)
 # ==============================================================================
 
@@ -149,6 +182,10 @@ test-spike: ## K6: 尖峰測試
 test-e2e-latency: ## K6: 端到端延遲測試 (HTTP -> Kafka -> WS)
 	@echo "⚡ 執行 k6 端到端延遲測試..."
 	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env WS_URL=$(WS_URL) scripts/k6/e2e-latency-test.js
+
+test-market-maker-batch: ## K6: 批量造市商測試
+	@echo "🌪️  執行 k6 批量造市商測試..."
+	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env SYMBOL=$(SYMBOL) scripts/k6/market-maker-batch.js
 
 test-capacity: ## K6: 撮合引擎極限容量測試
 	@echo "🚀 執行 k6 容量測試..."
@@ -288,7 +325,7 @@ aws-login: ## 登入 AWS ECR
 
 docker-build-push: aws-login check-ecs-service ## 編譯並推送指定微服務 Docker 鏡像至 AWS ECR
 	@echo "🐳 編譯 Docker 鏡像 (service=$(ECS_SERVICE), tag=$(ECR_IMAGE_TAG))..."
-	docker build --build-arg SERVICE_NAME=$(ECS_SERVICE) -t $$(cd $(TF_DIR) && terraform output -raw ecr_repository_url):$(ECR_IMAGE_TAG) .
+	docker build --platform linux/amd64 --build-arg SERVICE_NAME=$(ECS_SERVICE) -t $$(cd $(TF_DIR) && terraform output -raw ecr_repository_url):$(ECR_IMAGE_TAG) .
 	@echo "📤 推送鏡像至 ECR..."
 	docker push $$(cd $(TF_DIR) && terraform output -raw ecr_repository_url):$(ECR_IMAGE_TAG)
 
@@ -385,6 +422,10 @@ staging-spike-test: ## 以 staging ALB 執行 spike test
 staging-e2e-latency: ## 以 staging ALB 執行 E2E 延遲測試
 	@ALB_DNS=$$(cd $(TF_DIR) && terraform output -raw alb_dns_name); \
 	$(MAKE) test-e2e-latency BASE_URL=http://$$ALB_DNS/api/v1 WS_URL=ws://$$ALB_DNS/ws K6_ENV_FLAGS="$(K6_ENV_FLAGS)"
+
+staging-market-maker-batch: ## 以 staging ALB 執行批量造市商測試
+	@ALB_DNS=$$(cd $(TF_DIR) && terraform output -raw alb_dns_name); \
+	$(MAKE) test-market-maker-batch BASE_URL=http://$$ALB_DNS/api/v1 SYMBOL=$(SYMBOL) K6_ENV_FLAGS="$(K6_ENV_FLAGS)"
 
 staging-capacity: ## 以 staging ALB 執行容量測試
 	@ALB_DNS=$$(cd $(TF_DIR) && terraform output -raw alb_dns_name); \

@@ -10,6 +10,8 @@
 *.dylib
 /server
 *.test
+*.prof
+*.test
 *.out
 coverage.html
 coverage.txt
