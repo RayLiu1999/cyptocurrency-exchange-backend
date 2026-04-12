@@ -1,4 +1,4 @@
-.PHONY: build build-server build-gateway build-order-service build-matching-engine build-market-data-service build-simulation-service test test-integration test-race test-all test-smoke test-load test-spike test-coverage lint vuln fmt tidy clean dev-up dev-down dev-logs test-up test-down test-build test-logs infra-up infra-down db-migrate db-seed db-fresh bootstrap-init bootstrap-plan bootstrap-apply aws-login docker-build-push docker-build-push-core infra-init infra-plan infra-apply infra-destroy show-staging-outputs ecs-create ecs-delete ecs-deploy ecs-rollback ecs-status ecs-status-all ecs-logs ecs-exec ecs-create-core ecs-deploy-core ecs-delete-core staging-create-core staging-rollout-core staging-health staging-smoke-test staging-load-test staging-spike-test staging-baseline-test deploy-all destroy-all check-ecs-service help
+.PHONY: build build-server build-gateway build-order-service build-matching-engine build-market-data-service build-simulation-service test test-integration test-race test-all test-smoke test-load test-spike test-coverage lint vuln fmt tidy clean dev-up dev-down dev-logs test-up test-down test-build test-logs test-infra-up test-infra-down db-migrate db-seed db-fresh bootstrap-init bootstrap-plan bootstrap-apply aws-login docker-build-push docker-build-push-core infra-init infra-plan infra-apply infra-destroy show-staging-outputs ecs-create ecs-delete ecs-deploy ecs-rollback ecs-status ecs-status-all ecs-logs ecs-exec ecs-create-core ecs-deploy-core ecs-delete-core staging-create-core staging-rollout-core staging-health staging-smoke-test staging-load-test staging-spike-test staging-baseline-test deploy-all destroy-all check-ecs-service help
 
 # 變數定義
 BUILD_DIR=.
@@ -96,7 +96,7 @@ test-coverage: ## 產生測試覆蓋率報告
 # 測試用設施管理 (Infrastructure for Testing/CI)
 # ==============================================================================
 
-infra-up: ## 啟動基礎設施 (Postgres, Redis, Kafka)
+test-infra-up: ## 啟動基礎設施 (Postgres, Redis, Kafka)
 	@echo "🚀 啟動基礎設施..."
 	@docker compose -f $(INFRA_COMPOSE_FILE) up -d
 	@echo "⏳ 等待資料庫 Ready..."
@@ -106,7 +106,7 @@ infra-up: ## 啟動基礎設施 (Postgres, Redis, Kafka)
 	done
 	@echo "✅ 基礎設施已啟動"
 
-infra-down: ## 停止基礎設施
+test-infra-down: ## 停止基礎設施
 	@echo "🛑 停止基礎設施..."
 	@docker compose -f $(INFRA_COMPOSE_FILE) down
 
