@@ -1,5 +1,5 @@
 /**
- * 場景 A：撮合引擎容量測試（Matching Engine Capacity Test）
+ * 【效能找底】Capacity Test: 撮合引擎極限容量測試
  *
  * 目的：找出系統在 BTC-USD 單一交易對下的 TPS 容量拐點。
  * 測試假設：多個打單者持續對同一交易對下限價單，觀察下單吞吐量

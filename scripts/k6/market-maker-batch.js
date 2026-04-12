@@ -1,3 +1,14 @@
+/**
+ * 【批次負載】Batch Test: 批量造市商測試
+ * 目的：模擬多個造市商同時下大量限價單，測試撮合引擎的批量處理能力。
+ *
+ * 預期結論：
+ *   - 驗證批量 API 的吞吐量與穩定性
+ *   - 測試在大量訂單湧入時，撮合引擎是否能維持低延遲
+ *
+ * 執行方式：
+ *   k6 run market-maker-batch.js
+ */
 import http from "k6/http";
 import { check } from "k6";
 

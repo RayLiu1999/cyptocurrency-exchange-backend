@@ -1,3 +1,10 @@
+/**
+ * 【突波防護】Spike Test: 尖峰壓力測試
+ * 目的：模擬極端流量瞬間湧入，測試系統的極限與恢復能力。
+ *
+ * 執行方式：
+ *   k6 run spike-test.js
+ */
 import http from "k6/http";
 import { check, sleep } from "k6";
 

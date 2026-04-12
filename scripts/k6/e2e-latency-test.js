@@ -1,3 +1,13 @@
+/**
+ * 【真實體感】E2E Latency: 全鏈路端到端延遲測試
+ * 目的：量測從下單到收到 WebSocket 推播的完整延遲。
+ * 預期結論：
+ *   - 低 VU（10-50）時，P95 < 100ms，代表 API 層健康
+ *   - 高 VU（100+）時，P95 上升，找出第一個瓶頸層（DB/Kafka/CPU）
+ *
+ * 執行方式：
+ *   RATE=100 k6 run e2e-latency-test.js
+ */
 import http from "k6/http";
 import ws from "k6/ws";
 import { check, sleep } from "k6";

@@ -1,5 +1,5 @@
 /**
- * 場景 C：行情風暴測試（Market Storm Test）
+ * 【行情風暴】Storm Test: 行情風暴測試與資源隔離驗證
  *
  * 目的：同時壓測「下單」與「WebSocket 廣播」，
  *       驗證 Market Data Service 的資源隔離是否有效。

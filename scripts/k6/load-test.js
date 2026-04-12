@@ -1,3 +1,11 @@
+/**
+ * 【常態負載】Load Test: 散戶高頻發送負載測試
+ * 目的：打擊單張下單 API，驗證 API Gateway、連線池與微服務在常態壓力下的穩定度。
+ * 測量系統能同時支撐多少名虛擬用戶 (VU) 執行高頻交易操作。
+ *
+ * 執行方式：
+ *   k6 run load-test.js
+ */
 import http from "k6/http";
 import { check, sleep } from "k6";
 

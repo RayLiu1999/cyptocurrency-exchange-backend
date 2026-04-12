@@ -1,5 +1,5 @@
 /**
- * 場景 B：熱門交易對 vs 多交易對吞吐量對比
+ * 【架構對比】Hot vs Multi-Symbol: 交易對吞載量對比測試
  * （Hot Symbol vs Multi-Symbol Throughput Comparison）
  *
  * 目的：展示 Kafka Partition 設計帶來的影響。

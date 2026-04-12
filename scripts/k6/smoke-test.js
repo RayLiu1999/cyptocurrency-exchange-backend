@@ -1,3 +1,11 @@
+/**
+ * 【基礎驗證】Smoke Test: 端到端邏輯驗證（Smoke Test / E2E Sanity Check）
+ * 目的：確保核心業務流程健康，包含註冊、入金、下單、查單與撤單。
+ * 這是 CI/CD 的第一道防線，主要確保系統微服務間的狀態轉換正常，不追求極限 QPS。
+ *
+ * 執行方式：
+ *   k6 run smoke-test.js
+ */
 import http from "k6/http";
 import { check, fail } from "k6";
 
