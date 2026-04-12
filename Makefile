@@ -10,14 +10,22 @@ DB_CONTAINER ?= postgres
 BASE_URL ?= http://localhost:8100/api/v1
 WS_URL ?= ws://localhost:8100/ws
 SYMBOL ?= BTC-USD
+
+# 測試環境專用變數 (優先於 .env，避免開發環境汙染)
+GIN_MODE ?= test
+DATABASE_URL ?= postgres://$(DB_USER):$(DB_PASSWORD)@localhost:5432/$(DB_NAME)?sslmode=disable
+
+# 基礎設施組態檔路徑
+INFRA_COMPOSE_FILE = deploy/docker-compose.test-infra.yml
+
 K6_ENV_FLAGS ?=
 TERRAFORM_INIT_FLAGS ?=
 IMAGE_TAG ?= latest
 SUPPORTED_ECS_SERVICES = gateway order-service matching-engine market-data-service
-CORE_ECS_SERVICES = matching-engine order-service market-data-service gateway
-TEARDOWN_ECS_SERVICES = gateway market-data-service order-service matching-engine
+CORE_ECS_SERVICES         = matching-engine order-service market-data-service gateway
+TEARDOWN_ECS_SERVICES     = gateway market-data-service order-service matching-engine
 
-# 載入 .env 檔案並匯出為環境變數
+# 載入 .env 檔案並匯出為環境變數 (Makefile 變數優先於 .env)
 ifneq (,$(wildcard .env))
     include .env
     export $(shell sed 's/=.*//' .env)
@@ -27,135 +35,70 @@ help: ## 顯示所有可用指令
 	@echo "可用指令:"
 	@grep -h -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-build: build-gateway build-order-service build-matching-engine build-market-data-service build-simulation-service ## 編譯微服務專案 (本地)
-	@echo "✅ 微服務編譯完成"
+# ==============================================================================
+# 微服務編譯 (Local Build)
+# ==============================================================================
 
-build-server: ## legacy 單體版本入口（已退役，僅保留錯誤提示）
-	@echo "❌ build-server 為 legacy monolith 指令；現行請改用 'make build' 或個別 build-* target。"
+build: build-gateway build-order-service build-matching-engine build-market-data-service build-simulation-service ## 編譯所有微服務
+	@echo "✅ 所有微服務編譯完成"
+
+build-server: ## (已退役) Legacy 單體版本入口
+	@echo "❌ build-server 為 legacy monolith 指令；請改用 'make build'。"
 	@exit 1
 
-build-gateway: ## 編譯 gateway
+build-gateway: ## 編編 gateway
 	@echo "📦 編譯 gateway..."
 	go build -o $(BUILD_DIR)/gateway ./cmd/gateway
-	@echo "✅ 編譯完成: ./gateway"
 
 build-order-service: ## 編譯 order-service
 	@echo "📦 編譯 order-service..."
 	go build -o $(BUILD_DIR)/order-service ./cmd/order-service
-	@echo "✅ 編譯完成: ./order-service"
 
 build-matching-engine: ## 編譯 matching-engine
 	@echo "📦 編譯 matching-engine..."
 	go build -o $(BUILD_DIR)/matching-engine ./cmd/matching-engine
-	@echo "✅ 編譯完成: ./matching-engine"
 
 build-market-data-service: ## 編譯 market-data-service
 	@echo "📦 編譯 market-data-service..."
 	go build -o $(BUILD_DIR)/market-data-service ./cmd/market-data-service
-	@echo "✅ 編譯完成: ./market-data-service"
 
 build-simulation-service: ## 編譯 simulation-service
 	@echo "📦 編譯 simulation-service..."
 	go build -o $(BUILD_DIR)/simulation-service ./cmd/simulation-service
-	@echo "✅ 編譯完成: ./simulation-service"
 
-# 測試
+# ==============================================================================
+# 測試自動化 (Testing)
+# ==============================================================================
 
-test: ## 執行基礎單元測試 (不含整合測試)
+test: ## 執行單元測試
 	@echo "🧪 執行基礎單元測試..."
-	go test -v ./...
+	@GIN_MODE=$(GIN_MODE) DATABASE_URL="$(DATABASE_URL)" go test -v ./...
 
-test-integration: ## 執行整合測試 (含 E2E、併發測試)
+test-integration: ## 執行整合測試 (含 DB/併發測試)
 	@echo "🔥 執行整合與併發測試 (tags: integration)..."
-	go test -v -tags=integration ./internal/...
+	@GIN_MODE=$(GIN_MODE) DATABASE_URL="$(DATABASE_URL)" go test -v -tags=integration ./internal/infrastructure/election/... ./internal/repository/... ./internal/infrastructure/outbox/...
 
 test-race: ## 執行競態偵測測試
 	@echo "🏎️  執行競態偵測測試..."
-	go test -v -race ./...
+	@GIN_MODE=$(GIN_MODE) DATABASE_URL="$(DATABASE_URL)" go test -v -race ./...
 
-test-all: ## 執行所有測試 (含單元、整合、Race)
+test-all: ## 執行完整套件 (Unit, Integration, Race)
 	@echo "🚀 執行完整測試套件..."
-	go test -v -race -tags=integration ./...
+	@GIN_MODE=$(GIN_MODE) DATABASE_URL="$(DATABASE_URL)" go test -v -race -tags=integration ./...
 
-# k6 測試
-
-test-smoke: ## 執行 k6 冒煙測試（核心交易流程）
-	@echo "🔥 執行 k6 核心冒煙測試..."
-	@echo "> k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env SYMBOL=$(SYMBOL) scripts/k6/smoke-test.js"
-	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env SYMBOL=$(SYMBOL) scripts/k6/smoke-test.js
-
-test-load: ## 執行 k6 負載測試
-	@echo "🔥 執行 k6 負載測試..."
-	@echo "> k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) scripts/k6/load-test.js"
-	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) scripts/k6/load-test.js
-
-test-spike: ## 執行 k6 尖峰測試
-	@echo "🔥 執行 k6 尖峰測試..."
-	@echo "> k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) scripts/k6/spike-test.js"
-	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) scripts/k6/spike-test.js
-
-test-e2e-latency: ## 執行 k6 端到端延遲測試 (HTTP -> Kafka -> WS)
-	@echo "⚡ 執行 k6 端到端延遲測試..."
-	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env WS_URL=$(WS_URL) scripts/k6/e2e-latency-test.js
-
-test-capacity: ## 執行 k6 撮合引擎極限容量測試 (Ramping Arrival Rate)
-	@echo "🚀 執行 k6 容量測試..."
-	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env SYMBOL=$(SYMBOL) scripts/k6/matching-engine-capacity-test.js
-
-test-market-storm: ## 執行 k6 行情風暴測試 (下單製造行情 + 大量 WS 接收)
-	@echo "🌪️  執行 k6 行情風暴測試..."
-	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env WS_URL=$(WS_URL) scripts/k6/market-storm-test.js
-
-test-hot-symbol: ## 執行 k6 單一熱門交易對測試 (單一 Kafka Partition 競爭)
-	@echo "🔥 執行 k6 單一熱門交易對測試 (SYMBOL_MODE=hot)..."
-	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env SYMBOL_MODE=hot scripts/k6/hot-vs-multi-symbol-test.js
-
-test-multi-symbol: ## 執行 k6 多交易對測試 (多 Kafka Partition 分流吞吐量提升)
-	@echo "☄️  執行 k6 多交易對測試 (SYMBOL_MODE=multi)..."
-	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env SYMBOL_MODE=multi scripts/k6/hot-vs-multi-symbol-test.js
-
-test-coverage: ## 執行測試並產生覆蓋率報告
+test-coverage: ## 產生測試覆蓋率報告
 	@echo "📊 產生測試覆蓋率..."
-	go test -coverprofile=coverage.txt -covermode=atomic ./...
-	go tool cover -html=coverage.txt -o coverage.html
+	@GIN_MODE=$(GIN_MODE) DATABASE_URL="$(DATABASE_URL)" go test -coverprofile=coverage.txt -covermode=atomic ./...
+	@go tool cover -html=coverage.txt -o coverage.html
 	@echo "✅ 覆蓋率報告: coverage.html"
 
-# --- Docker 開發環境 (Air 熱重載) ---
-
-dev-up: ## 啟動開發環境 (含 Air 熱重載)
-	@echo "🚀 啟動開發環境 (Air，預設假設 infra 已由外部容器提供)..."
-	docker compose -f docker-compose.dev.yml up -d
-
-dev-down: ## 停止開發環境
-	@echo "🛑 停止開發環境..."
-	docker compose -f docker-compose.dev.yml down
-
-dev-logs: ## 查看開發環境日誌
-	docker compose -f docker-compose.dev.yml logs -f ${SERVICE_NAME:-gateway}
-
-# --- Docker 測試環境 ---
-
-test-up: ## 啟動測試環境容器
-	@echo "🐳 啟動測試環境..."
-	docker compose -f docker-compose.test.yml up -d
-
-test-down: ## 停止測試環境容器
-	@echo "🛑 停止測試環境..."
-	docker compose -f docker-compose.test.yml down
-
-test-build: ## 編譯 Docker 鏡像 (測試環境)
-	@echo "🐳 編譯 Docker 鏡像 (測試環境)..."
-	docker compose -f docker-compose.test.yml up -d --build
-	docker image prune -f
-
-test-logs: ## 查看測試環境日誌
-	docker compose -f docker-compose.test.yml logs -f ${SERVICE_NAME:-gateway}
-
-# --- 基礎設施管理 (Infrastructure) ---
+# ==============================================================================
+# 測試用設施管理 (Infrastructure for Testing/CI)
+# ==============================================================================
 
 infra-up: ## 啟動基礎設施 (Postgres, Redis, Kafka)
 	@echo "🚀 啟動基礎設施..."
-	docker compose -f deploy/docker-compose.infra.yml up -d
+	@docker compose -f $(INFRA_COMPOSE_FILE) up -d
 	@echo "⏳ 等待資料庫 Ready..."
 	@until docker exec $(DB_CONTAINER) pg_isready -U $(DB_USER) -d $(DB_NAME) > /dev/null 2>&1; do \
 		echo "Waiting for database..."; \
@@ -165,53 +108,94 @@ infra-up: ## 啟動基礎設施 (Postgres, Redis, Kafka)
 
 infra-down: ## 停止基礎設施
 	@echo "🛑 停止基礎設施..."
-	docker compose -f deploy/docker-compose.infra.yml down
+	@docker compose -f $(INFRA_COMPOSE_FILE) down
 
-# --- 資料庫輔助指令 (需確保 Postgres 容器已啟動) ---
+# ==============================================================================
+# 資料庫操作 (Database)
+# ==============================================================================
 
-db-migrate: ## 執行資料庫 Migration
+db-migrate: ## 執行資料庫 Migration (sql/schema.sql)
 	@echo "📊 執行 Migration..."
-	docker exec -i $(DB_CONTAINER) psql -U $(DB_USER) -d $(DB_NAME) < sql/schema.sql
+	@docker exec -i $(DB_CONTAINER) psql -U $(DB_USER) -d $(DB_NAME) < sql/schema.sql
 	@echo "✅ Migration 完成"
 
-db-seed: ## 插入測試資料
+db-seed: ## 插入測試種子資料 (sql/seed.sql)
 	@echo "🌱 插入測試資料..."
-	docker exec -i $(DB_CONTAINER) psql -U $(DB_USER) -d $(DB_NAME) < sql/seed.sql
+	@docker exec -i $(DB_CONTAINER) psql -U $(DB_USER) -d $(DB_NAME) < sql/seed.sql
 	@echo "✅ 測試資料插入完成"
 
-db-fresh: ## 清空並重建資料庫表結構
+db-fresh: ## 清空並重建資料庫結構
 	@echo "🧹 清空並重建 Public Schema..."
-	docker exec -i $(DB_CONTAINER) psql -U $(DB_USER) -d $(DB_NAME) -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-	$(MAKE) db-migrate
+	@docker exec -i $(DB_CONTAINER) psql -U $(DB_USER) -d $(DB_NAME) -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+	@$(MAKE) db-migrate
 	@echo "✅ 資料庫表結構已清空並重建"
 
-# --- 程式碼品質與整理 ---
+# ==============================================================================
+# K6 壓力測試 (Load Testing)
+# ==============================================================================
 
-lint: ## 執行程式碼檢查
+test-smoke: ## K6: 核心交易冒煙測試
+	@echo "🔥 執行 k6 核心冒煙測試..."
+	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env SYMBOL=$(SYMBOL) scripts/k6/smoke-test.js
+
+test-load: ## K6: 負載測試
+	@echo "🔥 執行 k6 負載測試..."
+	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) scripts/k6/load-test.js
+
+test-spike: ## K6: 尖峰測試
+	@echo "🔥 執行 k6 尖峰測試..."
+	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) scripts/k6/spike-test.js
+
+test-e2e-latency: ## K6: 端到端延遲測試 (HTTP -> Kafka -> WS)
+	@echo "⚡ 執行 k6 端到端延遲測試..."
+	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env WS_URL=$(WS_URL) scripts/k6/e2e-latency-test.js
+
+test-capacity: ## K6: 撮合引擎極限容量測試
+	@echo "🚀 執行 k6 容量測試..."
+	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env SYMBOL=$(SYMBOL) scripts/k6/matching-engine-capacity-test.js
+
+test-market-storm: ## K6: 行情風暴測試 (WS 吞吐量)
+	@echo "🌪️  執行 k6 行情風暴測試..."
+	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env WS_URL=$(WS_URL) scripts/k6/market-storm-test.js
+
+test-hot-symbol: ## K6: 單一熱門交易對測試
+	@echo "🔥 執行 k6 單一熱門交易對測試..."
+	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env SYMBOL_MODE=hot scripts/k6/hot-vs-multi-symbol-test.js
+
+test-multi-symbol: ## K6: 多交易對測試 (Kafka 分流驗證)
+	@echo "☄️  執行 k6 多交易對測試..."
+	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env SYMBOL_MODE=multi scripts/k6/hot-vs-multi-symbol-test.js
+
+# ==============================================================================
+# 開發與品質管理 (Development)
+# ==============================================================================
+
+dev-up: ## 啟動開發環境 (Air 熱重載)
+	@echo "🚀 啟動開發環境 (Air)..."
+	docker compose -f docker-compose.dev.yml up -d
+
+dev-down: ## 停止開發環境
+	docker compose -f docker-compose.dev.yml down
+
+lint: ## 執行程式碼檢查 (golangci-lint)
 	@echo "🔍 執行程式碼檢查..."
 	golangci-lint run ./...
 
-vuln: ## 檢查漏洞
+vuln: ## 檢查安全性漏洞 (govulncheck)
 	@echo "🔍 檢查漏洞..."
 	govulncheck ./...
 
 fmt: ## 格式化程式碼
 	@echo "✨ 格式化程式碼..."
 	go fmt ./...
-	@echo "✅ 格式化完成"
 
-tidy: ## 整理依賴
+tidy: ## 整理依賴 (go mod tidy)
 	@echo "📦 整理依賴..."
 	go mod tidy
-	@echo "✅ 依賴整理完成"
 
-clean: ## 清理編譯檔案與暫存
-	@echo "🧹 清理編譯檔案..."
-	rm -f $(BUILD_DIR)/gateway
-	rm -f $(BUILD_DIR)/order-service
-	rm -f $(BUILD_DIR)/matching-engine
-	rm -f $(BUILD_DIR)/market-data-service
-	rm -f $(BUILD_DIR)/simulation-service
+clean: ## 清理編譯檔案與測試快取
+	@echo "🧹 清理檔案..."
+	rm -f $(BUILD_DIR)/gateway $(BUILD_DIR)/order-service $(BUILD_DIR)/matching-engine $(BUILD_DIR)/market-data-service $(BUILD_DIR)/simulation-service
 	rm -f coverage.txt coverage.html
 	@echo "✅ 清理完成"
 

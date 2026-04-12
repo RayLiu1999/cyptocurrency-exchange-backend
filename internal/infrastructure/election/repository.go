@@ -2,9 +2,11 @@ package election
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -46,7 +48,10 @@ func (r *Repository) AcquireLock(ctx context.Context, partition, instanceID stri
 	if err != nil {
 		// pgx 找不到任何行（不符合 WHERE 條件）時回傳 pgx.ErrNoRows
 		// 這代表目前有人持有有效租約，本次競選失敗
-		return 0, false, nil
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("取得 leader 鎖失敗: %w", err)
 	}
 	return fencingToken, true, nil
 }
@@ -71,11 +76,13 @@ func (r *Repository) ExtendLease(ctx context.Context, partition, instanceID stri
 	return nil
 }
 
-// ReleaseLock 由 Leader 在優雅關機前主動釋放租約
-// 加速 Standby 的接管時間，避免等待租約自然過期
+// ReleaseLock 由 Leader 在優雅關機前主動釋放租約。
+// 這裡不直接 DELETE row，而是將 expires_at 立刻設為過期，
+// 讓下一任 Leader 仍經由 ON CONFLICT 路徑遞增 fencing_token。
 func (r *Repository) ReleaseLock(ctx context.Context, partition, instanceID string) error {
 	_, err := r.pool.Exec(ctx, `
-		DELETE FROM partition_leader_locks
+		UPDATE partition_leader_locks
+		SET expires_at = 0
 		WHERE partition = $1 AND leader_id = $2`,
 		partition, instanceID,
 	)
@@ -101,7 +108,10 @@ func (r *Repository) ValidateFencingToken(ctx context.Context, partition string,
 	if err != nil {
 		// 若 DB 中找不到鎖記錄（ErrNoRows），代表目前沒有 Leader 持有鎖
 		// 允許通過：結算服務做後續冪等保護即可
-		return true, nil
+		if errors.Is(err, pgx.ErrNoRows) {
+			return true, nil
+		}
+		return false, fmt.Errorf("驗證 fencing token 失敗: %w", err)
 	}
 
 	// token < currentToken：此訊息來自舊一代 Leader，是殭屍訊息，應拒絕
@@ -110,4 +120,3 @@ func (r *Repository) ValidateFencingToken(ctx context.Context, partition string,
 	}
 	return true, nil
 }
-

@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/RayLiu1999/exchange/internal/infrastructure/logger"
@@ -10,6 +11,16 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
+
+type workerRepository interface {
+	CountPending(ctx context.Context) (int64, error)
+	WithTx(ctx context.Context, fn func(context.Context) error) error
+	FetchPending(ctx context.Context, batchSize int, gracePeriod time.Duration) ([]*Message, error)
+	IncrementRetry(ctx context.Context, id uuid.UUID) error
+	MarkPublishedBatch(ctx context.Context, ids []uuid.UUID) error
+}
+
+var _ workerRepository = (*Repository)(nil)
 
 // Publisher 定義將訊息發布到 Kafka 的介面，解耦 Worker 與 Kafka 實作
 type Publisher interface {
@@ -20,7 +31,7 @@ type Publisher interface {
 // 它定期掃描 outbox_messages 表，將 Pending 訊息發送到 Kafka 並標記為 Published
 // 設計保證：即使主流程的 Kafka.Publish() 失敗，訊息也不會遺失
 type Worker struct {
-	repo      *Repository
+	repo      workerRepository
 	publisher Publisher
 	interval  time.Duration
 	batchSize int
@@ -60,47 +71,50 @@ func (w *Worker) process(ctx context.Context) {
 		metrics.SetOutboxPendingCount(float64(pending))
 	}
 
-	// 加上 5 秒冷靜期，避免搶到剛被熱路徑建立、且正在發送中的事件
-	msgs, err := w.repo.FetchPending(ctx, w.batchSize, 5*time.Second)
+	err := w.repo.WithTx(ctx, func(txCtx context.Context) error {
+		// 將抓取、重試遞增與刪除放在同一個 DB Transaction 內，
+		// 讓 FOR UPDATE SKIP LOCKED 的鎖能持續到整批處理結束。
+		msgs, err := w.repo.FetchPending(txCtx, w.batchSize, 5*time.Second)
+		if err != nil {
+			return fmt.Errorf("讀取 pending 訊息失敗: %w", err)
+		}
+
+		successfulIDs := make([]uuid.UUID, 0, len(msgs))
+		for _, msg := range msgs {
+			start := time.Now()
+			publishErr := w.publisher.PublishRaw(ctx, msg.Topic, msg.PartitionKey, msg.Payload)
+			latency := time.Since(start)
+
+			if publishErr != nil {
+				logger.Log.Warn("Outbox Worker 發送訊息到 Kafka 失敗",
+					zap.String("id", msg.ID.String()),
+					zap.String("topic", msg.Topic),
+					zap.Error(publishErr),
+				)
+				if err := w.repo.IncrementRetry(txCtx, msg.ID); err != nil {
+					return fmt.Errorf("增加 retry_count 失敗: %w", err)
+				}
+				metrics.ObserveOutboxPublish("error", latency)
+				continue
+			}
+
+			successfulIDs = append(successfulIDs, msg.ID)
+			metrics.ObserveOutboxPublish("success", latency)
+		}
+
+		if len(successfulIDs) == 0 {
+			return nil
+		}
+
+		if err := w.repo.MarkPublishedBatch(txCtx, successfulIDs); err != nil {
+			return fmt.Errorf("批次標記 published 失敗: %w", err)
+		}
+
+		logger.Log.Debug("Outbox Worker 批次刪除成功", zap.Int("count", len(successfulIDs)))
+		return nil
+	})
 	if err != nil {
-		logger.Log.Error("Outbox Worker 讀取 Pending 訊息失敗", zap.Error(err))
-		return
-	}
-
-	var successfulIDs []uuid.UUID
-
-	for _, msg := range msgs {
-		start := time.Now()
-		publishErr := w.publisher.PublishRaw(ctx, msg.Topic, msg.PartitionKey, msg.Payload)
-		latency := time.Since(start)
-
-		if publishErr != nil {
-			// 發送失敗：增加重試計數，等待下次掃描重試
-			logger.Log.Warn("Outbox Worker 發送訊息到 Kafka 失敗",
-				zap.String("id", msg.ID.String()),
-				zap.String("topic", msg.Topic),
-				zap.Error(publishErr),
-			)
-			_ = w.repo.IncrementRetry(ctx, msg.ID)
-			metrics.ObserveOutboxPublish("error", latency)
-			continue
-		}
-
-		// 發送成功：收集 ID 等待批次刪除
-		successfulIDs = append(successfulIDs, msg.ID)
-		metrics.ObserveOutboxPublish("success", latency)
-	}
-
-	// 批次標記已發布（物理刪除）
-	if len(successfulIDs) > 0 {
-		if markErr := w.repo.MarkPublishedBatch(ctx, successfulIDs); markErr != nil {
-			logger.Log.Error("Outbox Worker 批次標記 Published 失敗",
-				zap.Int("count", len(successfulIDs)),
-				zap.Error(markErr),
-			)
-		} else {
-			logger.Log.Debug("Outbox Worker 批次刪除成功", zap.Int("count", len(successfulIDs)))
-		}
+		logger.Log.Error("Outbox Worker 處理批次失敗", zap.Error(err))
 	}
 }
 

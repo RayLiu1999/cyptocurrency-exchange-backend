@@ -25,11 +25,12 @@
 本系統拆分為 **4 個獨立微服務**：
 
 | 服務                    | 職責                                                                                                  |
-| :---------------------- | :---------------------------------------------------------------------------------------------------- |
-| **gateway**             | 對外統一入口、分散式限流、冪等性檢查、反向代理                                                        |
+| :----------------- | :---------------------------------------------------------------------------------------------------- |
+| **gateway**             | 對外統一入口、分散式限流、冪等性檢查、**反向代理 (含 Simulation API)**                                |
 | **order-service**       | HTTP API (含造市商批次端點)、TX1（鎖資金 + 建單 + 寫 Outbox）、Outbox Worker、消費結算事件執行 TX2    |
 | **matching-engine**     | Leader Election 選主、Cold-Start 快照還原、消費訂單事件、執行單執行緒精準撮合、發布結算/成交/行情事件 |
 | **market-data-service** | 維護 WebSocket 長連線、消費 Kafka 事件並即時推播至千人前端                                            |
+| **simulation-service**  | 模擬交易微服務，接收來自 Gateway 的指令以啟動/停止模擬器，模擬前端發送交易流量                        |
 
 ```mermaid
 flowchart LR
@@ -40,6 +41,7 @@ flowchart LR
         OS[order-service]
         ME[matching-engine]
         MDS[market-data-service]
+        SS[simulation-service]
     end
 
     subgraph Infra
@@ -51,10 +53,13 @@ flowchart LR
     FE <-->|HTTP / WS| GW
     GW -->|Rate Limit / Idemp / Proxy| OS
     GW <-->|WS Proxy| MDS
+    GW -->|Simulation Control| SS
 
     OS -->|Batch Orders & TX1| DB
     OS -.->|Outbox Worker| DB
     OS -->|"Publish (Orders)"| K
+
+    SS -->|Mock Orders| GW
 
     K -->|"Consume Orders (Leader Only)"| ME
     ME -->|Restore snapshot| DB
@@ -142,8 +147,8 @@ _(更多深入的 K6 架構驗證劇本，請參考 `scripts/k6/README.md`)_
 ├── cmd/
 │   ├── gateway/             # 對外 API 閘道
 │   ├── order-service/       # 訂單服務（含 Outbox Worker）
-│   ├── matching-engine/     # 撮合引擎（含 Leader Election）
-│   └── market-data-service/ # 行情推播服務（WebSocket）
+│   ├── market-data-service/ # 行情推播服務（WebSocket）
+│   └── simulation-service/  # 模擬交易服務（壓測控制）
 ├── internal/
 │   ├── api/                 # HTTP Handlers
 │   ├── core/                # 核心邏輯（撮合引擎演算法）
@@ -155,6 +160,8 @@ _(更多深入的 K6 架構驗證劇本，請參考 `scripts/k6/README.md`)_
 │   │   ├── outbox/          # Transactional Outbox Worker
 │   │   └── redis/           # Redis 分散式限流
 │   ├── middleware/          # Rate Limiter、Idempotency、JWT
+│   ├── repository/          # Batch Ingestion、PostgreSQL & Redis DAO
+│   └── simulation/          # 模擬器邏輯與控制 API
 │   └── repository/          # Batch Ingestion、PostgreSQL & Redis DAO
 ├── deploy/                  # Terraform AWS、ECSPresso 配置
 ├── sql/                     # Schema 與 Migrations

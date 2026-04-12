@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	github_com_jackc_pgx_v5_pgconn "github.com/jackc/pgx/v5/pgconn"
-
 	"github.com/RayLiu1999/exchange/internal/infrastructure/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -18,9 +17,30 @@ type Repository struct {
 	pool *pgxpool.Pool
 }
 
+type dbExecutor interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // NewRepository 建立一個新的 Outbox Repository
 func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
+}
+
+func (r *Repository) getExecutor(ctx context.Context) dbExecutor {
+	if tx := db.GetTx(ctx); tx != nil {
+		return tx
+	}
+	return r.pool
+}
+
+// WithTx 在單一 DB Transaction 中執行 callback，供 Worker 持有 SKIP LOCKED 鎖直到批次處理完成。
+func (r *Repository) WithTx(ctx context.Context, fn func(context.Context) error) error {
+	return pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
+		txCtx := context.WithValue(ctx, db.TxKey, tx)
+		return fn(txCtx)
+	})
 }
 
 // Insert 在與業務事務（ExecTx）相同的 TX 內插入一筆 Outbox 記錄
@@ -30,16 +50,7 @@ func (r *Repository) Insert(ctx context.Context, msg *Message) error {
 	msg.CreatedAt = time.Now().UnixMilli()
 	msg.Status = StatusPending
 
-	var executor interface {
-		Exec(ctx context.Context, sql string, arguments ...any) (commandTag github_com_jackc_pgx_v5_pgconn.CommandTag, err error)
-	}
-	if tx := db.GetTx(ctx); tx != nil {
-		executor = tx
-	} else {
-		executor = r.pool
-	}
-
-	_, err := executor.Exec(ctx, `
+	_, err := r.getExecutor(ctx).Exec(ctx, `
 		INSERT INTO outbox_messages
 			(id, aggregate_id, aggregate_type, topic, partition_key, payload, status, retry_count, created_at, published_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
@@ -94,7 +105,7 @@ func (r *Repository) BatchInsert(ctx context.Context, msgs []*Message) error {
 // 使用 SKIP LOCKED 確保多個 Worker 實例不會取到同一批訊息
 func (r *Repository) FetchPending(ctx context.Context, batchSize int, gracePeriod time.Duration) ([]*Message, error) {
 	threshold := time.Now().Add(-gracePeriod).UnixMilli()
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.getExecutor(ctx).Query(ctx, `
 		SELECT id, aggregate_id, aggregate_type, topic, partition_key, payload, status, retry_count, created_at, published_at
 		FROM outbox_messages
 		WHERE status = $1 AND created_at <= $2
@@ -126,7 +137,7 @@ func (r *Repository) FetchPending(ctx context.Context, batchSize int, gracePerio
 
 // MarkPublished 將已成功 Produce 到 Kafka 的訊息進行物理刪除（單筆）
 func (r *Repository) MarkPublished(ctx context.Context, id uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.getExecutor(ctx).Exec(ctx, `
 		DELETE FROM outbox_messages
 		WHERE id = $1`,
 		id,
@@ -139,7 +150,7 @@ func (r *Repository) MarkPublishedBatch(ctx context.Context, ids []uuid.UUID) er
 	if len(ids) == 0 {
 		return nil
 	}
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.getExecutor(ctx).Exec(ctx, `
 		DELETE FROM outbox_messages
 		WHERE id = ANY($1)`,
 		ids,
@@ -150,7 +161,7 @@ func (r *Repository) MarkPublishedBatch(ctx context.Context, ids []uuid.UUID) er
 // IncrementRetry 當 Kafka Produce 失敗時，增加 retry_count
 // 未來可以根據 retry_count 設計死信佇列（Dead Letter Queue）
 func (r *Repository) IncrementRetry(ctx context.Context, id uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.getExecutor(ctx).Exec(ctx, `
 		UPDATE outbox_messages
 		SET retry_count = retry_count + 1
 		WHERE id = $1`,
@@ -162,7 +173,7 @@ func (r *Repository) IncrementRetry(ctx context.Context, id uuid.UUID) error {
 // CountPending 回傳目前 Pending 狀態的訊息總數（用於 Prometheus Gauge 指標）
 func (r *Repository) CountPending(ctx context.Context) (int64, error) {
 	var count int64
-	err := r.pool.QueryRow(ctx, `
+	err := r.getExecutor(ctx).QueryRow(ctx, `
 		SELECT COUNT(*) FROM outbox_messages WHERE status = $1`,
 		StatusPending,
 	).Scan(&count)

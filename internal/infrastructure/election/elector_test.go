@@ -1,185 +1,141 @@
-package election_test
+package election
 
 import (
+	"context"
+	"errors"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-// ============================================================
-// mock 實作：用 in-memory map 模擬 PostgreSQL election 行為
-// ============================================================
-
-type mockLockStore struct {
+// mockElectorRepo 是 Repository 的測試存根 (Stub)，用來模擬資料庫行為並記錄呼叫狀況
+type mockElectorRepo struct {
 	mu           sync.Mutex
-	partition    string
-	leaderID     string
-	fencingToken int64
-	expiresAt    time.Time
+	acquireToken int64 // 模擬 AcquireLock 成功後回傳的 Fencing Token
+	acquireOK    bool  // 模擬是否成功取得 Leader 鎖
+	acquireErr   error // 模擬資料庫連線錯誤
+	extendErr    error // 模擬延長租約失敗（例如已被新主取代）
+	releaseErr   error // 模擬釋放鎖失敗
+
+	// 以下用於事後驗證的計數器與紀錄值
+	acquireCalls   int
+	extendCalls    int
+	releaseCalls   int
+	lastPartition  string
+	lastInstanceID string
+	lastToken      int64
 }
 
-func (m *mockLockStore) AcquireLock(partition, instanceID string, leaseDuration time.Duration) (int64, bool, error) {
+// AcquireLock 模擬搶鎖邏輯
+func (m *mockElectorRepo) AcquireLock(ctx context.Context, partition, instanceID string) (int64, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	now := time.Now()
-	// 鎖不存在或已過期
-	if m.partition == "" || now.After(m.expiresAt) {
-		m.partition = partition
-		m.leaderID = instanceID
-		m.fencingToken++
-		m.expiresAt = now.Add(leaseDuration)
-		return m.fencingToken, true, nil
-	}
-	// 有人持有有效鎖
-	return 0, false, nil
+	m.acquireCalls++
+	m.lastPartition = partition
+	m.lastInstanceID = instanceID
+	return m.acquireToken, m.acquireOK, m.acquireErr
 }
 
-func (m *mockLockStore) ExtendLease(partition, instanceID string, token int64, leaseDuration time.Duration) error {
+// ExtendLease 模擬續約邏輯
+func (m *mockElectorRepo) ExtendLease(ctx context.Context, partition, instanceID string, fencingToken int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	if m.leaderID != instanceID || m.fencingToken != token {
-		return assert.AnError // 租約已被新 Leader 覆蓋
-	}
-	m.expiresAt = time.Now().Add(leaseDuration)
-	return nil
+	m.extendCalls++
+	m.lastPartition = partition
+	m.lastInstanceID = instanceID
+	m.lastToken = fencingToken
+	return m.extendErr
 }
 
-func (m *mockLockStore) ReleaseLock(partition, instanceID string) error {
+// ReleaseLock 模擬主動釋放鎖邏輯
+func (m *mockElectorRepo) ReleaseLock(ctx context.Context, partition, instanceID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	if m.leaderID == instanceID {
-		m.partition = ""
-		m.leaderID = ""
-		m.fencingToken = 0
-	}
-	return nil
+	m.releaseCalls++
+	m.lastPartition = partition
+	m.lastInstanceID = instanceID
+	return m.releaseErr
 }
 
-func (m *mockLockStore) CurrentToken() int64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.fencingToken
+// TestElectorTick_BecomesLeaderAndInvokesCallback 驗證：從 Standby 成功轉為 Leader 的流程
+func TestElectorTick_BecomesLeaderAndInvokesCallback(t *testing.T) {
+	// 1. 準備背景：設定 Mock 讓他回傳成功，並拿到 Token=7
+	repo := &mockElectorRepo{acquireToken: 7, acquireOK: true}
+	elector := &Elector{repo: repo, partition: "orders:BTC-USD", instanceID: "instance-a"}
+	callbackCount := 0
+
+	// 2. 執行一次 Tick 邏輯
+	elector.tick(context.Background(), func() {
+		callbackCount++ // 成功成為 Leader 時應執行此回呼
+	}, nil)
+
+	// 3. 驗證結果
+	assert.True(t, elector.IsLeader())                    // 狀態應變為 Leader
+	assert.Equal(t, int64(7), elector.FencingToken())     // Token 應正確存入
+	assert.Equal(t, 1, callbackCount)                     // Callback 應被呼叫 1 次
+	assert.Equal(t, 1, repo.acquireCalls)                 // 應確實呼叫過資料庫搶鎖
+	assert.Equal(t, "orders:BTC-USD", repo.lastPartition) // 參數應傳遞正確
+	assert.Equal(t, "instance-a", repo.lastInstanceID)
 }
 
-// ============================================================
-// 測試案例
-// ============================================================
+// TestElectorTick_LosesLeadershipWhenExtendLeaseFails 驗證：Leader 在續約失敗時應自動退位（防腦裂）
+func TestElectorTick_LosesLeadershipWhenExtendLeaseFails(t *testing.T) {
+	// 1. 準備背景：原本是 Leader (Token=11)，但設定 Mock 續約會報錯
+	repo := &mockElectorRepo{extendErr: errors.New("stale leader")}
+	elector := &Elector{repo: repo, partition: "orders:BTC-USD", instanceID: "instance-a"}
+	elector.isLeader.Store(true)
+	elector.fencingToken.Store(11)
+	lostLeadership := 0
 
-// TestElection_FencingToken_MonotonicallyIncreasing
-// 驗證：每次新 Leader 取得鎖，FencingToken 必須單調遞增
-func TestElection_FencingToken_MonotonicallyIncreasing(t *testing.T) {
-	store := &mockLockStore{}
-	leaseDuration := 50 * time.Millisecond
+	// 2. 執行 Tick（此時 Elector 會嘗試續約但失敗）
+	elector.tick(context.Background(), nil, func() {
+		lostLeadership++ // 失去身份時應執行此回呼
+	})
 
-	// 第一次競選
-	token1, acquired1, _ := store.AcquireLock("test", "instance-A", leaseDuration)
-	require.True(t, acquired1)
-	assert.Equal(t, int64(1), token1, "第一次競選 Token 應為 1")
-
-	// 讓租約過期
-	time.Sleep(60 * time.Millisecond)
-
-	// 第二次競選（新 Leader）
-	token2, acquired2, _ := store.AcquireLock("test", "instance-B", leaseDuration)
-	require.True(t, acquired2)
-	assert.Greater(t, token2, token1, "FencingToken 必須單調遞增")
+	// 3. 驗證結果
+	assert.False(t, elector.IsLeader()) // 狀態應變回 Standby
+	assert.Zero(t, elector.FencingToken())
+	assert.Equal(t, 1, lostLeadership)
+	assert.Equal(t, 1, repo.extendCalls)       // 應呼叫過續約介面
+	assert.Equal(t, int64(11), repo.lastToken) // 續約參數應包含當前 Token
 }
 
-// TestElection_OnlyOneLeaderAtATime
-// 驗證：同一時間只有一個實例能取得鎖（防腦裂基本保證）
-func TestElection_OnlyOneLeaderAtATime(t *testing.T) {
-	store := &mockLockStore{}
-	leaseDuration := 5 * time.Second
+// TestElectorTick_RemainsStandbyWhenAcquireMisses 驗證：搶鎖失敗時應安靜地保持 Standby
+func TestElectorTick_RemainsStandbyWhenAcquireMisses(t *testing.T) {
+	// 1. 準備背景：Mock 回傳搶鎖失敗（代表別人目前是 Leader）
+	repo := &mockElectorRepo{acquireOK: false}
+	elector := &Elector{repo: repo, partition: "orders:BTC-USD", instanceID: "instance-a"}
+	callbackCount := 0
 
-	var leaderCount atomic.Int64
-	const goroutines = 10
-	var wg sync.WaitGroup
+	// 2. 執行 Tick
+	elector.tick(context.Background(), func() {
+		callbackCount++
+	}, nil)
 
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		instanceID := "instance-" + string(rune('A'+i))
-		go func(id string) {
-			defer wg.Done()
-			_, acquired, _ := store.AcquireLock("test", id, leaseDuration)
-			if acquired {
-				leaderCount.Add(1)
-			}
-		}(instanceID)
-	}
-	wg.Wait()
-
-	assert.Equal(t, int64(1), leaderCount.Load(), "不管幾個 goroutine 同時競選，只能有一個 Leader")
+	// 3. 驗證結果
+	assert.False(t, elector.IsLeader())
+	assert.Zero(t, elector.FencingToken())
+	assert.Equal(t, 0, callbackCount) // 不應觸發成為 Leader 的回呼
+	assert.Equal(t, 1, repo.acquireCalls)
 }
 
-// TestElection_StaleLeaderCantRenewLease
-// 驗證：舊 Leader 持有過期的 FencingToken，無法延長租約
-func TestElection_StaleLeaderCantRenewLease(t *testing.T) {
-	store := &mockLockStore{}
-	leaseDuration := 50 * time.Millisecond
+// TestElectorRun_ReleasesLockOnContextCancel 驗證：程序關閉 (Graceful Shutdown) 時應釋放鎖
+func TestElectorRun_ReleasesLockOnContextCancel(t *testing.T) {
+	// 1. 準備背景：原本是 Leader
+	repo := &mockElectorRepo{}
+	elector := &Elector{repo: repo, partition: "orders:BTC-USD", instanceID: "instance-a", renewInterval: time.Millisecond}
+	elector.isLeader.Store(true)
+	elector.fencingToken.Store(13)
 
-	// instance-A 取得鎖
-	staleToken, acquired, _ := store.AcquireLock("test", "instance-A", leaseDuration)
-	require.True(t, acquired)
+	// 2. 建立一個立即取消的 Context，並啟動 Run（Run 應該會偵測到 Done 並結束循環）
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	elector.Run(ctx, nil, nil)
 
-	// 讓租約過期，由 instance-B 搶到
-	time.Sleep(60 * time.Millisecond)
-	_, acquired2, _ := store.AcquireLock("test", "instance-B", leaseDuration)
-	require.True(t, acquired2, "instance-B 應成功搶到鎖")
-
-	// 舊 instance-A 嘗試用過期的 Token 延長租約，應失敗
-	err := store.ExtendLease("test", "instance-A", staleToken, leaseDuration)
-	assert.Error(t, err, "舊 Leader 不應能延長已被覆蓋的租約")
-}
-
-// TestElection_GracefulRelease_SpeedsUpFailover
-// 驗證：Leader 主動釋放鎖後，新 Leader 立刻能取得（不需等到租約過期）
-func TestElection_GracefulRelease_SpeedsUpFailover(t *testing.T) {
-	store := &mockLockStore{}
-	leaseDuration := 10 * time.Second // 租約很長，以凸顯「不用等到期」的差異
-
-	// instance-A 取得鎖
-	_, acquired, _ := store.AcquireLock("test", "instance-A", leaseDuration)
-	require.True(t, acquired)
-
-	// instance-A 主動釋放（模擬 onBecomeLeader 後的優雅關機）
-	err := store.ReleaseLock("test", "instance-A")
-	require.NoError(t, err)
-
-	// instance-B 立刻就能取得鎖，不用等 10 秒租約到期
-	_, acquired2, _ := store.AcquireLock("test", "instance-B", leaseDuration)
-	assert.True(t, acquired2, "主動釋放後，新 Leader 應立刻能取得鎖")
-}
-
-// TestFencingToken_ValidateStaleness
-// 驗證：下游 ValidateFencingToken 邏輯正確攔截殭屍訊息
-func TestFencingToken_ValidateStaleness(t *testing.T) {
-	store := &mockLockStore{}
-	leaseDuration := 50 * time.Millisecond
-
-	// 第一代 Leader 取得 Token=1
-	staleToken, acquired, _ := store.AcquireLock("test", "instance-A", leaseDuration)
-	require.True(t, acquired)
-	assert.Equal(t, int64(1), staleToken)
-
-	// 租約過期，第二代 Leader 取得 Token=2
-	time.Sleep(60 * time.Millisecond)
-	_, acquired2, _ := store.AcquireLock("test", "instance-B", leaseDuration)
-	require.True(t, acquired2)
-	currentToken := store.CurrentToken()
-	assert.Equal(t, int64(2), currentToken)
-
-	// 模擬下游驗證：第一代的訊息（token=1）應被判為殭屍訊息
-	isStale := staleToken < currentToken
-	assert.True(t, isStale, "來自舊 Leader 的訊息（token=1）應被識別為殭屍訊息並拒絕")
-
-	// 模擬下游驗證：第二代的訊息（token=2）應正常通過
-	isValid := currentToken >= currentToken
-	assert.True(t, isValid, "來自當前 Leader 的訊息（token=2）應正常通過驗證")
+	// 3. 驗證結果
+	assert.Equal(t, 1, repo.releaseCalls) // 迴圈結束前應呼叫 ReleaseLock
+	assert.False(t, elector.IsLeader())   // 狀態應清空
+	assert.Zero(t, elector.FencingToken())
 }
