@@ -35,17 +35,3 @@
 ## 3. 未來擴充：雙模態與 CCXT 整合
 - **雙模態架構 (Dual-Mode)**: 將分為 PAPER（模擬盤）與 LIVE（實盤）兩種執行模式，透過請求路由控制資料來源與實際執行的目的地。
 - **CCXT 整合**: 未來將整合 [CCXT](https://docs.ccxt.com/) 核心庫，連接多家如 Binance 等外部交易所。這使得微服務能擴展成「跨交易所聚合平台」，執行資金的跨平台調度與量化交易。
-
----
-
-*備註：關於各階段具體實作與目標，請詳閱 [ROADMAP.md](../planning/ROADMAP.md)。*
-
----
-
-## 延伸閱讀（封存文件）
-
-以下文件已移至 `docs/archive/`，供需要時深入查閱：
-- `trading_flow/`：8 篇完整的交易流程技術教學（訂單建立、撮合引擎、兩階段結算、WebSocket、Redis、Kafka、架構模式）
-- `AWS_DEPLOYMENT_GUIDE.md`：全套 AWS EKS + Aurora + MSK 生產部署指南
-- `IAM_SETUP_GUIDE.md`：AWS IAM 權限設定教學
-- `GITOPS_CI_SETUP.md`：GHCR → ArgoCD GitOps CI/CD 流程
