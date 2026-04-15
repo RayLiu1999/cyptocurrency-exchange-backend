@@ -65,24 +65,34 @@ brew install k6
 1. **價格過度發散**：因為腳本隨機生成的價格落差過大，無法交錯買賣單。
 2. **撮合嚴重延遲 (Lagging)**：大門開太寬，但您背後的引擎還是單執行緒、讀取資料庫。這不是 Error，這正是我們需要開發「記憶體撮合引擎 (In-Memory Matching)」的最佳理由！
 
-### B. 如何驗證分散式資料最終一致性 (Data Consistency Verification)
+### B. 如何驗證分散式資料最終一致性 (Data Consistency Verification & Audit SQL)
 
-在執行高併發壓測後，我們必須驗證 Outbox Pattern 與 Kafka 的 At-least-once 處理是否精準無誤，沒有掉單也沒有錯帳。請於壓測結束後執行以下 SQL 確認一致性：
+壓測不只看 TPS 和 Latency，**更重要的是壓測後跑 Audit 驗證**。TPS 10 萬但資產不平，代表金融系統徹底失敗。
+在執行高併發壓測後，我們提供了自動化的高標準核對程序，確保系統在混亂中依然遵循資產與狀態的最終一致性 (Invariants)。
 
-```sql
--- 1. 驗證所有 Outbox 訊息是否都被背景 Worker 成功發送
--- 預期結果：0 筆 (代表所有事件都被成功發佈出去)
-SELECT COUNT(*) FROM outbox_events WHERE status = 'PENDING';
+請於壓測結束後執行以下自動化對帳腳本：
 
--- 2. 驗證訂單狀態的一致性
--- 如果引擎已經處理完畢，我們不應該看到大量卡在 'NEW' (未處理) 的訂單
--- 預期結果：NEW 的數量應隨時間迅速降至 0，大多數應該是 FILLED, PARTIALLY_FILLED 或 REJECTED
-SELECT status, COUNT(*) FROM orders GROUP BY status;
-
--- 3. 驗證資產鎖定一致性 (進階)
--- 比較系統中所有活躍訂單的保留資金總和，與帳戶中的 locked_balance 是否相符。
--- 這是金融系統最嚴苛的對帳條件，確保高併發下資金沒被超賣。
+```bash
+make test-audit
 ```
+
+該腳本 (`scripts/audit/audit_test.go`) 會自動利用 SQL 驗證包含但不限於以下核心條件：
+
+1. **Stuck Locked Funds (資金鎖定卡死)**
+   - 找出資金被鎖 (`locked > 0`)，但沒有任何活躍訂單 (`status IN (1, 2)`) 的帳戶。
+   - 代表資金被鎖定後，訂單被取消/完成卻沒有執行退款，引發用戶資產凍結的超嚴重問題。
+2. **Stuck Orders (幽靈訂單)**
+   - 確保所有活躍訂單在預期時間內得到狀態推進，若發現數分鐘前的訂單仍是 `NEW`，這暗示 Outbox 積壓或撮合引擎當機。
+3. **Trade / Order 數量對帳**
+   - 驗證每張訂單的 `filled_quantity` 等於其背後所有 `trades` 記錄中包含該訂單的 `quantity` 數量總和。
+   - 保障結算邏輯沒有落單、沒有漏帳。
+4. **Outbox 訊息發送一致性**
+   - 確認所有 `outbox_messages` 都已經被成功處理，沒有過時滯留的 `Pending` 紀錄。
+   - 驗證資料庫交易與 Kafka 訊息發佈達成最終一致，事件沒有遺失。
+5. **負資產防禦 (Negative Balance Check)**
+   - 驗證高併發與 Race Condition 環境下，所有帳戶的可用餘額與鎖定金額皆為大於等於 `0`。
+   - 防禦極端情況導致的超扣與系統金庫擊穿。
+
 
 ### C. 重置污損的壓測資料庫
 

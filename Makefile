@@ -12,8 +12,8 @@ WS_URL ?= ws://localhost:8100/ws
 SYMBOL ?= BTC-USD
 
 # 測試環境專用變數 (優先於 .env，避免開發環境汙染)
-GIN_MODE ?= test
-DATABASE_URL ?= postgres://$(DB_USER):$(DB_PASSWORD)@localhost:5432/$(DB_NAME)?sslmode=disable
+override GIN_MODE = test
+override DATABASE_URL = postgres://$(DB_USER):$(DB_PASSWORD)@localhost:5432/$(DB_NAME)?sslmode=disable
 
 # 基礎設施組態檔路徑
 INFRA_COMPOSE_FILE = deploy/docker-compose.test-infra.yml
@@ -202,6 +202,30 @@ test-hot-symbol: ## K6: 單一熱門交易對測試
 test-multi-symbol: ## K6: 多交易對測試 (Kafka 分流驗證)
 	@echo "☄️  執行 k6 多交易對測試..."
 	@k6 run $(K6_ENV_FLAGS) --env BASE_URL=$(BASE_URL) --env SYMBOL_MODE=multi scripts/k6/hot-vs-multi-symbol-test.js
+
+test-audit: ## K6 壓測後驗證: 執行資料庫最終一致性與資產守恆對帳
+	@echo "🔍 執行壓測後自動對帳 (Audit)..."
+	@GIN_MODE=$(GIN_MODE) DATABASE_URL="$(DATABASE_URL)" go test -v ./scripts/audit/...
+
+# ==============================================================================
+# 本地環境測試
+# ==============================================================================
+
+test-up: ## 啟動測試環境容器
+	@echo "🐳 啟動測試環境..."
+	docker compose -f docker-compose.test.yml up -d
+
+test-down: ## 停止測試環境容器
+	@echo "🛑 停止測試環境..."
+	docker compose -f docker-compose.test.yml down
+
+test-build: ## 編譯 Docker 鏡像 (測試環境)
+	@echo "🐳 編譯 Docker 鏡像 (測試環境)..."
+	docker compose -f docker-compose.test.yml up -d --build
+	docker image prune -f
+
+test-logs: ## 查看測試環境日誌
+	docker compose -f docker-compose.test.yml logs -f ${SERVICE_NAME:-gateway}
 
 # ==============================================================================
 # 開發與品質管理 (Development)

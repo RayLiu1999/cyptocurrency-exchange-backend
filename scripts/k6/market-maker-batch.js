@@ -33,9 +33,12 @@ export default function () {
     const joinRes = http.post(`${baseUrl}/test/join`, null);
     if (joinRes.status === 201) {
       persistentUserId = joinRes.json("user_id");
+    } else if (joinRes.status === 429) {
+      // 遇上 Rate Limit
+      console.warn("註冊請求太頻繁 (429)，將在下一次迭代重試...");
+      return;
     } else {
-      console.error("無法註冊測試帳戶");
-      // 若失敗直接返回，這樣就不會執行後續導致 100% 失敗
+      console.error(`無法註冊測試帳戶，狀態碼: ${joinRes.status}`);
       return;
     }
   }
